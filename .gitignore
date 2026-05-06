@@ -1,0 +1,9 @@
+# Ignore secrets
+.env
+
+# Ignore gluetun state and server configs
+openvpn_config/config/
+wireguard_config/config/
+
+# MacOS/System
+.DS_Store
