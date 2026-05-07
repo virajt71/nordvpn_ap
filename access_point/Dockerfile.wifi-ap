@@ -1,7 +1,10 @@
 FROM debian:bullseye-slim
+
 RUN apt-get update && apt-get install -y --no-install-recommends \
     hostapd dnsmasq iproute2 iptables util-linux procps \
     && rm -rf /var/lib/apt/lists/*
+
 COPY access_point/wifi-ap-entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
+
 ENTRYPOINT ["/entrypoint.sh"]

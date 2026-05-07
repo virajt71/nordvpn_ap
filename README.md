@@ -22,60 +22,56 @@ Transform your Linux machine into a robust, dedicated VPN WiFi router. This proj
 ### 1. Prerequisites
 - A Linux machine (tested on Ubuntu/Garuda).
 - Docker and Docker Compose installed.
-- A physical WiFi adapter capable of AP (Access Point) mode. (Update `AP_IFACE` in the `wifi-ap-entrypoint.sh` scripts if your interface name differs from `wlxac15a2e2f47e`).
+- A physical WiFi adapter capable of AP (Access Point) mode.
 
-### 2. Configure Environment Variables
-Copy the `.env` file template and fill in your credentials. We use a centralized `.env` file in the root directory so you can seamlessly switch between OpenVPN and WireGuard without duplicating secrets.
-
-Create a `.env` file in the root of the repository:
-```env
-# NordVPN Credentials (for OpenVPN)
-OPENVPN_USER=your_nordvpn_service_user
-OPENVPN_PASSWORD=your_nordvpn_service_password
-
-# WireGuard Credentials (for NordLynx)
-WIREGUARD_PRIVATE_KEY=your_wireguard_private_key
-
-# Shared VPN Settings
-SERVER_COUNTRIES=India
-FIREWALL_OUTBOUND_SUBNETS=192.168.50.145/32 # Your host's local LAN IP to bypass the killswitch
+### 2. First-time Interactive Setup
+Run the startup wizard once from the repository root:
+```bash
+chmod +x startup.sh
+./startup.sh
 ```
+
+The script asks for:
+- WiFi interface (`AP_IFACE`)
+- VPN type (`VPN_TYPE`: `wireguard` or `openvpn`)
+- Required NordVPN credentials for the selected VPN type
+- Hotspot SSID/password and network settings
+
+It saves all values to a root `.env` file, so next runs can reuse the same configuration.
 
 > **Note on WireGuard Keys:** NordVPN does not provide WireGuard private keys directly in their dashboard. To obtain yours:
 > 1. Generate an Access Token from the NordVPN Dashboard (Manual Setup).
 > 2. Run: `curl -s -u token:<YOUR_TOKEN> https://api.nordvpn.com/v1/users/services/credentials | jq -r .nordlynx_private_key`
 
-### 3. Customize Hotspot Settings (Optional)
-Edit `access_point/hostapd.conf` inside either the `openvpn_config` or `wireguard_config` folder to change your WiFi name and password.
-* Default SSID: `MyHotspot`
-* Default Password: `ChangeMe123!`
+### 3. Manual Config (Optional)
+If you prefer manual setup:
+```bash
+cp .env.example .env
+```
+Then edit `.env` directly.
 
 ---
 
 ## 🚀 Usage
 
-Navigate to the directory of the protocol you wish to use and start the Docker Compose stack.
-
-**For WireGuard (Recommended for speed):**
+Use the single root compose file:
 ```bash
-cd wireguard_config
-sudo docker compose up -d
+docker compose up -d --build
 ```
 
-**For OpenVPN:**
+To reconfigure settings later, run:
 ```bash
-cd openvpn_config
-sudo docker compose up -d
+./startup.sh
 ```
 
 ### Checking Logs
 To view the status of your VPN connection:
 ```bash
-sudo docker logs gluetun -f
+docker logs gluetun -f
 ```
 To view the status of the WiFi Hotspot, connected devices, and DHCP leases:
 ```bash
-sudo docker logs wifi-ap -f
+docker logs wifi-ap -f
 ```
 
 ---
@@ -85,11 +81,11 @@ sudo docker logs wifi-ap -f
 **Clients connect but have "No Internet"**
 1. Check if Gluetun successfully established a connection (`docker logs gluetun`).
 2. Ensure your `FIREWALL_OUTBOUND_SUBNETS` variable accurately reflects your host machine's LAN IP.
-3. Restart the AP container to force it to re-inject the namespace routing rules: `sudo docker compose restart wifi-ap`
+3. Restart the AP container to force it to re-inject the namespace routing rules: `docker compose restart wifi-ap`
 
 **Streaming Apps (like JioHotstar) detect the VPN**
 Streaming services aggressively block VPN IP addresses.
-1. Force the VPN to grab a new server IP: `sudo docker compose restart gluetun`
+1. Force the VPN to grab a new server IP: `docker compose restart gluetun`
 2. **Mobile Users:** Go to your phone's App Settings and explicitly **Deny** "Location" permissions for the streaming app, then clear the app's cache. Streaming apps often compare your VPN IP against your phone's physical GPS location.
 
 ---

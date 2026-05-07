@@ -13,13 +13,12 @@ services:
     volumes:
       - ./config:/gluetun
     env_file:
-      - ../.env
+      - .env
     environment:
       - VPN_SERVICE_PROVIDER=nordvpn
-      - VPN_TYPE=wireguard
-      # You need to provide your NordLynx (WireGuard) Private Key here.
-      # To get it, generate a manual setup access token from NordVPN dashboard and run:
-      # curl -s -u token:<YOUR_TOKEN> https://api.nordvpn.com/v1/users/services/credentials | jq -r .nordlynx_private_key
+      - VPN_TYPE=${VPN_TYPE}
+      - OPENVPN_USER=${OPENVPN_USER}
+      - OPENVPN_PASSWORD=${OPENVPN_PASSWORD}
       - WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY}
       - SERVER_COUNTRIES=${SERVER_COUNTRIES}
       - FIREWALL_OUTBOUND_SUBNETS=${FIREWALL_OUTBOUND_SUBNETS}
@@ -38,15 +37,11 @@ services:
       context: .
       dockerfile: access_point/Dockerfile.wifi-ap
     container_name: wifi-ap
-    # Host network so it can manage physical interfaces (wlxac15a2e2f47e)
     network_mode: host
-    # Host PID so it can nsenter into gluetun's network namespace
     pid: host
     privileged: true
-    volumes:
-      - ./access_point/hostapd.conf:/etc/hostapd/hostapd.conf:ro
-      - ./access_point/dnsmasq.conf:/etc/dnsmasq.conf:ro
-      - ./access_point/wifi-ap-entrypoint.sh:/entrypoint.sh:ro
+    env_file:
+      - .env
     depends_on:
       gluetun:
         condition: service_healthy
