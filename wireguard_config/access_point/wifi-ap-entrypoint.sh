@@ -8,8 +8,8 @@
 set -euo pipefail
 
 AP_IFACE="wlxac15a2e2f47e"
-AP_IP="192.168.88.1"
-AP_SUBNET="192.168.88.0/24"
+AP_IP="192.168.60.1"
+AP_SUBNET="192.168.60.0/24"
 ROUTING_TABLE=100
 
 # ── Helpers ───────────────────────────────────────────────
