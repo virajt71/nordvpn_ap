@@ -7,6 +7,9 @@ AP_SUBNET="${AP_SUBNET:-192.168.60.0/24}"
 AP_SSID="${AP_SSID:-MyHotspot}"
 AP_PASSWORD="${AP_PASSWORD:-ChangeMe123!}"
 AP_CHANNEL="${AP_CHANNEL:-6}"
+AP_HW_MODE="${AP_HW_MODE:-g}"
+AP_CHANNEL_WIDTH="${AP_CHANNEL_WIDTH:-20}"
+AP_SECURITY="${AP_SECURITY:-wpa2}"
 ROUTING_TABLE=100
 
 find_vpn_pid() {
@@ -22,19 +25,59 @@ interface=${AP_IFACE}
 driver=nl80211
 ssid=${AP_SSID}
 channel=${AP_CHANNEL}
-hw_mode=g
+hw_mode=${AP_HW_MODE}
 ieee80211n=1
 wmm_enabled=1
 auth_algs=1
+EOF
+
+    case "${AP_SECURITY,,}" in
+        wpa3)
+            echo "==> [wifi-ap] Security: WPA3-SAE"
+            cat >> /tmp/hostapd.conf <<EOF
+wpa=2
+wpa_key_mgmt=SAE
+rsn_pairwise=CCMP
+ieee80211w=2
+sae_password=${AP_PASSWORD}
+EOF
+            ;;
+        wpa2-wpa3|mixed)
+            echo "==> [wifi-ap] Security: WPA2/WPA3 Mixed Mode"
+            cat >> /tmp/hostapd.conf <<EOF
+wpa=2
+wpa_key_mgmt=WPA-PSK SAE
+rsn_pairwise=CCMP
+ieee80211w=1
+wpa_passphrase=${AP_PASSWORD}
+sae_password=${AP_PASSWORD}
+EOF
+            ;;
+        *)
+            echo "==> [wifi-ap] Security: WPA2-PSK (default)"
+            cat >> /tmp/hostapd.conf <<EOF
 wpa=2
 wpa_key_mgmt=WPA-PSK
 rsn_pairwise=CCMP
 wpa_passphrase=${AP_PASSWORD}
+EOF
+            ;;
+    esac
+
+    cat >> /tmp/hostapd.conf <<EOF
 logger_syslog=-1
 logger_syslog_level=2
 logger_stdout=-1
 logger_stdout_level=2
 EOF
+
+    # Add 5GHz/AC/AX specific settings if needed
+    if [[ "$AP_HW_MODE" == "a" || "$AP_HW_MODE" == "ac" || "$AP_HW_MODE" == "ax" ]]; then
+        {
+            echo "ieee80211ac=1"
+            [[ "$AP_HW_MODE" == "ax" ]] && echo "ieee80211ax=1"
+        } >> /tmp/hostapd.conf
+    fi
 }
 
 write_dnsmasq_conf() {
@@ -132,6 +175,17 @@ ip link set "$AP_IFACE" down 2>/dev/null || true
 ip addr flush dev "$AP_IFACE" 2>/dev/null || true
 ip addr add "$AP_IP/24" dev "$AP_IFACE"
 ip link set "$AP_IFACE" up
+
+# Background loop to ensure IP stays (NetworkManager fix)
+(
+    while true; do
+        if ! ip addr show "$AP_IFACE" | grep -q "$AP_IP"; then
+            echo "  [keep-alive] Restoring IP $AP_IP to $AP_IFACE"
+            ip addr add "$AP_IP/24" dev "$AP_IFACE" 2>/dev/null || true
+        fi
+        sleep 5
+    done
+) &
 
 echo "==> [wifi-ap] Starting hostapd..."
 hostapd /tmp/hostapd.conf &

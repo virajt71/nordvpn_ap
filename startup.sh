@@ -92,13 +92,13 @@ spinner_start() {
 }
 
 spinner_stop() {
-    local result="${1:-done}"   # "done" | "fail"
+    local result="${1:-done}"
     if [[ -n "$SPINNER_PID" ]]; then
         kill "$SPINNER_PID" 2>/dev/null || true
         wait "$SPINNER_PID" 2>/dev/null || true
         SPINNER_PID=""
     fi
-    printf "\r\033[2K" >&2   # erase spinner line
+    printf "\r\033[2K" >&2
     if [[ "$result" == "fail" ]]; then
         print_error "Failed."
     fi
@@ -316,11 +316,31 @@ ensure_nord_cache() {
     fi
 }
 
+# ─── City tmpfile helpers (cross-subshell state) ──────────────────────────────
+# SELECTED_CITY cannot be set inside $() subshells — use a tmpfile as IPC.
+
 SELECTED_CITY=""
+_CITY_TMPFILE=""
+
+_city_tmp_init() {
+    _CITY_TMPFILE="$(mktemp /tmp/.nord_city.XXXXXX)"
+    : > "$_CITY_TMPFILE"
+}
+
+_city_tmp_set() {
+    echo "$1" > "$_CITY_TMPFILE"
+}
+
+_city_tmp_read() {
+    SELECTED_CITY=""
+    [[ -f "$_CITY_TMPFILE" ]] && SELECTED_CITY="$(cat "$_CITY_TMPFILE")"
+    rm -f "$_CITY_TMPFILE"
+    _CITY_TMPFILE=""
+}
+
+# ─── Location picker ──────────────────────────────────────────────────────────
 
 choose_nord_location() {
-    SELECTED_CITY=""
-
     if ! ensure_nord_cache; then
         prompt_default "VPN country (SERVER_COUNTRIES)" "India"
         return
@@ -378,21 +398,23 @@ _choose_nord_location_fzf() {
         )" || city="(Any — use country only)"
 
         if [[ "$city" != "(Any — use country only)" && -n "$city" ]]; then
-            SELECTED_CITY="$city"
+            _city_tmp_set "$city"
             print_success "City: ${city}"
         else
             print_info "No city pin — best server in ${country}."
         fi
     elif (( city_count == 1 )); then
-        SELECTED_CITY="$(echo "$cities_json" | head -1)"
-        print_info "Single city available: ${SELECTED_CITY} (auto-selected)."
+        local solo
+        solo="$(echo "$cities_json" | head -1)"
+        _city_tmp_set "$solo"
+        print_info "Single city available: ${solo} (auto-selected)."
     fi
 
     echo "$country"
 }
 
 _choose_nord_location_fallback() {
-    local names=() i choice country cities_json city_count city city_arr=()
+    local names=() i choice country cities_json city_count city_arr=()
 
     mapfile -t names < <(jq -r '.[].name' "$NORD_CACHE" | sort)
 
@@ -423,8 +445,8 @@ _choose_nord_location_fallback() {
         echo >&2
         read -r -p "  Select city [1-${#city_arr[@]}, Enter=any]: " choice
         if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#city_arr[@]} )); then
-            SELECTED_CITY="${city_arr[$((choice-1))]}"
-            print_success "City: ${SELECTED_CITY}"
+            _city_tmp_set "${city_arr[$((choice-1))]}"
+            print_success "City: ${city_arr[$((choice-1))]}"
         fi
     fi
 
@@ -496,11 +518,21 @@ configure_env() {
     else
         print_step "NordLynx Private Key"
         print_info "Get key via: curl -s -u token:<YOUR_TOKEN> https://api.nordvpn.com/v1/users/services/credentials | jq -r .nordlynx_private_key"
-        wireguard_private_key="$(prompt_secret "NordLynx private key")"
+        while true; do
+            wireguard_private_key="$(prompt_secret "NordLynx private key")"
+            local klen=${#wireguard_private_key}
+            local stars
+            printf -v stars '%*s' "$klen" '' && stars="${stars// /\*}"
+            printf "  ${COLOR_DIM}%s${COLOR_RESET} ${COLOR_CYAN}(%d chars)${COLOR_RESET}\n" "$stars" "$klen" >&2
+            [[ $klen -ge 44 ]] && break
+            print_warn "Key too short (${klen} chars). NordLynx key must be ≥ 44 chars."
+        done
     fi
 
     print_step "VPN Location"
+    _city_tmp_init
     server_countries="$(choose_nord_location)"
+    _city_tmp_read
     server_cities="${SELECTED_CITY:-}"
     firewall_subnets="$(prompt_default "Host LAN CIDR for kill-switch bypass (FIREWALL_OUTBOUND_SUBNETS)" "192.168.50.145/32")"
 
@@ -514,6 +546,11 @@ configure_env() {
     ap_channel="$(prompt_default "WiFi channel" "6")"
     ap_ip="$(prompt_default "Gateway IP" "192.168.60.1")"
     ap_subnet="$(prompt_default "Subnet CIDR" "192.168.60.0/24")"
+
+    print_step "WiFi Security"
+    local sec_options=("wpa2" "wpa3" "mixed")
+    local sec_labels=("WPA2-PSK (Default)" "WPA3-SAE (Modern, requires newer devices)" "WPA2/WPA3 Mixed Mode")
+    ap_security="$(select_with_arrows "Select security mode (↑↓ + Enter)" sec_options sec_labels 0)"
 
     cat > "$ENV_FILE" <<EOF
 # Runtime profile
@@ -538,6 +575,7 @@ AP_PASSWORD=${ap_password}
 AP_CHANNEL=${ap_channel}
 AP_IP=${ap_ip}
 AP_SUBNET=${ap_subnet}
+AP_SECURITY=${ap_security}
 EOF
 
     chmod 600 "$ENV_FILE"
@@ -599,7 +637,6 @@ main() {
     echo >&2
 
     spinner_start "Building images…"
-    # Run compose with output captured; spinner shows progress
     if docker compose up -d --build 2>&1; then
         spinner_stop done
         print_success "Stack is up."

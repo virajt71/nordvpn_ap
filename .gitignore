@@ -1,7 +1,6 @@
 # Ignore secrets
 .env
 
-
 # Ignore gluetun state and server configs
 config/
 
