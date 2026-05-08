@@ -3,6 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="${ROOT_DIR}/.env"
+NORD_CACHE="${ROOT_DIR}/.nord_locations.json"
+NORD_CACHE_TTL=86400   # 24 h
 SELECTED_VPN_TYPE=""
 
 TOTAL_STEPS=6
@@ -105,8 +107,7 @@ spinner_stop() {
 # ─── Summary table ────────────────────────────────────────────────────────────
 
 print_summary() {
-    local iface="$1" vpn="$2" ssid="$3" gw="$4" country="$5"
-    local col_w=20
+    local iface="$1" vpn="$2" ssid="$3" gw="$4" country="$5" city="${6:-any}"
     local line="──────────────────────────────────────────────"
 
     echo >&2
@@ -121,6 +122,7 @@ print_summary() {
     _summary_row "Interface"   "$iface"
     _summary_row "VPN Type"    "$vpn"
     _summary_row "Country"     "$country"
+    _summary_row "City"        "$city"
     _summary_row "SSID"        "$ssid"
     _summary_row "Gateway IP"  "$gw"
 
@@ -275,6 +277,160 @@ choose_vpn_type() {
     select_with_arrows "Select VPN protocol (↑↓ + Enter)" options labels 0
 }
 
+# ─── NordVPN location data ────────────────────────────────────────────────────
+
+ensure_nord_cache() {
+    local now
+    now="$(date +%s)"
+
+    if [[ -f "$NORD_CACHE" ]]; then
+        local mtime
+        mtime="$(stat -c %Y "$NORD_CACHE" 2>/dev/null || stat -f %m "$NORD_CACHE" 2>/dev/null || echo 0)"
+        if (( now - mtime < NORD_CACHE_TTL )); then
+            return 0
+        fi
+    fi
+
+    if ! command -v curl >/dev/null 2>&1; then
+        print_warn "curl not found — cannot fetch NordVPN locations."
+        return 1
+    fi
+    if ! command -v jq >/dev/null 2>&1; then
+        print_warn "jq not found — cannot parse NordVPN locations."
+        return 1
+    fi
+
+    spinner_start "Fetching NordVPN server locations…"
+    local raw
+    if raw="$(curl -sf --max-time 15 "https://api.nordvpn.com/v1/servers/countries")"; then
+        echo "$raw" > "$NORD_CACHE"
+        spinner_stop done
+        local count
+        count="$(jq 'length' "$NORD_CACHE" 2>/dev/null || echo '?')"
+        print_success "Cached ${count} countries."
+        return 0
+    else
+        spinner_stop fail
+        print_warn "Failed to fetch locations — falling back to manual entry."
+        return 1
+    fi
+}
+
+SELECTED_CITY=""
+
+choose_nord_location() {
+    SELECTED_CITY=""
+
+    if ! ensure_nord_cache; then
+        prompt_default "VPN country (SERVER_COUNTRIES)" "India"
+        return
+    fi
+
+    if ! command -v fzf >/dev/null 2>&1; then
+        print_warn "fzf not found — using numbered fallback."
+        _choose_nord_location_fallback
+        return
+    fi
+
+    _choose_nord_location_fzf
+}
+
+_choose_nord_location_fzf() {
+    local country city cities_json city_count
+
+    print_info "Type to search. Enter to confirm."
+    country="$(
+        jq -r '.[].name' "$NORD_CACHE" \
+        | sort \
+        | fzf \
+            --prompt "  🌍 Country ❯ " \
+            --height=40% \
+            --border=rounded \
+            --border-label=" NordVPN Country " \
+            --border-label-pos=3 \
+            --info=inline \
+            --pointer="▶" \
+            --highlight-line \
+            --color="border:#4a90d9,label:#4a90d9,prompt:#7ec8e3,pointer:#00c896,hl:#00c896,hl+:#00c896" \
+            2>/dev/tty
+    )" || { print_warn "No country selected."; return 1; }
+
+    print_success "Country: ${country}"
+
+    cities_json="$(jq -r --arg c "$country" '.[] | select(.name==$c) | .cities[].name' "$NORD_CACHE" 2>/dev/null)"
+    city_count="$(echo "$cities_json" | grep -c '[^[:space:]]' 2>/dev/null || echo 0)"
+
+    if (( city_count > 1 )); then
+        print_info "${city_count} cities available — pick one, or Esc for country-level."
+        city="$(
+            { echo "(Any — use country only)"; echo "$cities_json"; } \
+            | fzf \
+                --prompt "  🏙  City    ❯ " \
+                --height=40% \
+                --border=rounded \
+                --border-label=" NordVPN City " \
+                --border-label-pos=3 \
+                --info=inline \
+                --pointer="▶" \
+                --highlight-line \
+                --color="border:#4a90d9,label:#4a90d9,prompt:#7ec8e3,pointer:#00c896,hl:#00c896,hl+:#00c896" \
+                2>/dev/tty
+        )" || city="(Any — use country only)"
+
+        if [[ "$city" != "(Any — use country only)" && -n "$city" ]]; then
+            SELECTED_CITY="$city"
+            print_success "City: ${city}"
+        else
+            print_info "No city pin — best server in ${country}."
+        fi
+    elif (( city_count == 1 )); then
+        SELECTED_CITY="$(echo "$cities_json" | head -1)"
+        print_info "Single city available: ${SELECTED_CITY} (auto-selected)."
+    fi
+
+    echo "$country"
+}
+
+_choose_nord_location_fallback() {
+    local names=() i choice country cities_json city_count city city_arr=()
+
+    mapfile -t names < <(jq -r '.[].name' "$NORD_CACHE" | sort)
+
+    echo >&2
+    for i in "${!names[@]}"; do
+        printf "  ${COLOR_DIM}%3d)${COLOR_RESET} %s\n" "$(( i+1 ))" "${names[$i]}" >&2
+    done
+    echo >&2
+
+    while true; do
+        read -r -p "  Select country [1-${#names[@]}]: " choice
+        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#names[@]} )); then
+            country="${names[$((choice-1))]}"; break
+        fi
+        print_warn "Invalid — enter 1–${#names[@]}."
+    done
+    print_success "Country: ${country}"
+
+    cities_json="$(jq -r --arg c "$country" '.[] | select(.name==$c) | .cities[].name' "$NORD_CACHE" 2>/dev/null)"
+    city_count="$(echo "$cities_json" | grep -c '[^[:space:]]' 2>/dev/null || echo 0)"
+
+    if (( city_count > 1 )); then
+        mapfile -t city_arr <<< "$cities_json"
+        echo >&2
+        for i in "${!city_arr[@]}"; do
+            printf "  ${COLOR_DIM}%3d)${COLOR_RESET} %s\n" "$(( i+1 ))" "${city_arr[$i]}" >&2
+        done
+        echo >&2
+        read -r -p "  Select city [1-${#city_arr[@]}, Enter=any]: " choice
+        if [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= ${#city_arr[@]} )); then
+            SELECTED_CITY="${city_arr[$((choice-1))]}"
+            print_success "City: ${SELECTED_CITY}"
+        fi
+    fi
+
+    echo "$country"
+}
+
 # ─── Running container check ──────────────────────────────────────────────────
 
 check_running_named_containers() {
@@ -319,7 +475,7 @@ check_running_named_containers() {
 # ─── .env writer ──────────────────────────────────────────────────────────────
 
 configure_env() {
-    local ap_iface vpn_type server_countries firewall_subnets
+    local ap_iface vpn_type server_countries server_cities firewall_subnets
     local ap_ssid ap_password ap_channel ap_ip ap_subnet
     local openvpn_user="" openvpn_password="" wireguard_private_key=""
 
@@ -343,8 +499,9 @@ configure_env() {
         wireguard_private_key="$(prompt_secret "NordLynx private key")"
     fi
 
-    print_step "VPN Settings"
-    server_countries="$(prompt_default "VPN country (SERVER_COUNTRIES)" "India")"
+    print_step "VPN Location"
+    server_countries="$(choose_nord_location)"
+    server_cities="${SELECTED_CITY:-}"
     firewall_subnets="$(prompt_default "Host LAN CIDR for kill-switch bypass (FIREWALL_OUTBOUND_SUBNETS)" "192.168.50.145/32")"
 
     print_step "Hotspot Settings"
@@ -371,6 +528,7 @@ WIREGUARD_PRIVATE_KEY=${wireguard_private_key}
 
 # Shared VPN Settings
 SERVER_COUNTRIES=${server_countries}
+SERVER_CITIES=${server_cities}
 FIREWALL_OUTBOUND_SUBNETS=${firewall_subnets}
 
 # Access Point Settings
@@ -384,7 +542,7 @@ EOF
 
     chmod 600 "$ENV_FILE"
     SELECTED_VPN_TYPE="${vpn_type}"
-    print_summary "$ap_iface" "$vpn_type" "$ap_ssid" "$ap_ip" "$server_countries"
+    print_summary "$ap_iface" "$vpn_type" "$ap_ssid" "$ap_ip" "$server_countries" "${server_cities:-any}"
 }
 
 # ─── VPN type change cleanup ──────────────────────────────────────────────────
