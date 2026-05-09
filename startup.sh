@@ -7,8 +7,6 @@ NORD_CACHE="${ROOT_DIR}/.nord_locations.json"
 NORD_CACHE_TTL=86400   # 24 h
 SELECTED_VPN_TYPE=""
 
-TOTAL_STEPS=6
-CURRENT_STEP=0
 
 COLOR_RESET=""
 COLOR_BOLD=""
@@ -63,13 +61,9 @@ print_banner() {
 # ─── Step counter ─────────────────────────────────────────────────────────────
 
 print_step() {
-    (( CURRENT_STEP++ )) || true
     local label="$1"
-    local line="────────────────────────────────────────"
     echo >&2
-    echo "${COLOR_BOLD}${COLOR_BLUE}┌─ Step ${CURRENT_STEP}/${TOTAL_STEPS} ${line:${#label}+15}${COLOR_RESET}" >&2
-    echo "${COLOR_BOLD}${COLOR_BLUE}│  ${COLOR_WHITE}${label}${COLOR_RESET}" >&2
-    echo "${COLOR_BOLD}${COLOR_BLUE}└${COLOR_RESET}" >&2
+    echo "${COLOR_BOLD}${COLOR_CYAN}  $label${COLOR_RESET}" >&2
 }
 
 # ─── Spinner ──────────────────────────────────────────────────────────────────
@@ -234,6 +228,19 @@ select_with_arrows() {
     done
 }
 
+find_index() {
+    local val="$1"
+    local -n _arr="$2"
+    local i
+    for i in "${!_arr[@]}"; do
+        if [[ "${_arr[$i]}" == "$val" ]]; then
+            echo "$i"
+            return 0
+        fi
+    done
+    echo 0
+}
+
 # ─── Interface / VPN selectors ────────────────────────────────────────────────
 
 list_wifi_interfaces() {
@@ -271,10 +278,14 @@ choose_wifi_interface() {
     select_with_arrows "Select WiFi interface (↑↓ + Enter)" interfaces labels 0
 }
 
-choose_vpn_type() {
+step_vpn_protocol() {
+    print_step "VPN Protocol"
     local options=("wireguard" "openvpn")
     local labels=("WireGuard  (NordLynx — recommended)" "OpenVPN")
-    select_with_arrows "Select VPN protocol (↑↓ + Enter)" options labels 0
+    local idx
+    idx=$(find_index "${VPN_TYPE:-wireguard}" options)
+    VPN_TYPE="$(select_with_arrows "Select VPN protocol (↑↓ + Enter)" options labels "$idx")"
+    print_success "Protocol: ${VPN_TYPE}"
 }
 
 # ─── NordVPN location data ────────────────────────────────────────────────────
@@ -455,72 +466,61 @@ _choose_nord_location_fallback() {
 
 # ─── Running container check ──────────────────────────────────────────────────
 
-check_running_named_containers() {
-    local running=() choice name
-
-    for name in gluetun wifi-ap; do
-        if docker ps --format '{{.Names}}' | awk -v n="$name" '$0==n{found=1} END{exit !found}'; then
-            running+=("$name")
-        fi
-    done
-
-    [[ ${#running[@]} -eq 0 ]] && return
+check_running_containers() {
+    if [[ -z "$(docker compose ps -q 2>/dev/null)" ]]; then
+        return
+    fi
 
     echo >&2
-    echo "${COLOR_BOLD}${COLOR_YELLOW}  ┌─ Running containers detected ──────────────┐${COLOR_RESET}" >&2
-    for name in "${running[@]}"; do
-        echo "${COLOR_YELLOW}  │  • ${name}${COLOR_RESET}" >&2
-    done
+    echo "${COLOR_BOLD}${COLOR_YELLOW}  ┌─ Running stack detected ───────────────────┐${COLOR_RESET}" >&2
+    echo "${COLOR_YELLOW}  │  The existing Docker Compose stack is running.  │${COLOR_RESET}" >&2
     echo "${COLOR_BOLD}${COLOR_YELLOW}  └────────────────────────────────────────────┘${COLOR_RESET}" >&2
     echo >&2
 
     while true; do
-        read -r -p "  Stop them and continue, or exit? [Y/e]: " choice
+        read -r -p "  Down the stack and continue, or exit? [Y/e]: " choice
         choice="${choice:-Y}"
         case "$choice" in
             Y|y)
-                spinner_start "Stopping containers…"
-                docker stop "${running[@]}" >/dev/null
+                spinner_start "Taking stack down…"
+                docker compose down >/dev/null 2>&1
                 spinner_stop done
-                print_success "Containers stopped."
+                print_success "Stack taken down."
                 return
                 ;;
             E|e)
                 print_info "Exiting without changes."
                 exit 0
                 ;;
-            *) print_warn "Enter Y to stop or e to exit." ;;
+            *) print_warn "Enter Y to continue or e to exit." ;;
         esac
     done
 }
 
 # ─── .env writer ──────────────────────────────────────────────────────────────
 
-configure_env() {
-    local ap_iface vpn_type server_countries server_cities firewall_subnets
-    local ap_ssid ap_password ap_channel ap_ip ap_subnet
-    local openvpn_user="" openvpn_password="" wireguard_private_key=""
+# ─── Configuration Steps ──────────────────────────────────────────────────────
 
+step_network_interface() {
     print_step "Network Interface"
-    ap_iface="$(choose_wifi_interface)"
-    print_success "Interface: ${ap_iface}"
+    AP_IFACE="$(choose_wifi_interface)"
+    print_success "Interface: ${AP_IFACE}"
+}
 
-    print_step "VPN Protocol"
-    vpn_type="$(choose_vpn_type)"
-    print_success "Protocol: ${vpn_type}"
 
-    if [[ "$vpn_type" == "openvpn" ]]; then
+step_vpn_credentials() {
+    if [[ "$VPN_TYPE" == "openvpn" ]]; then
         print_step "NordVPN OpenVPN Credentials"
         print_info "Requires service credentials (not account password)."
         print_info "Get them: https://my.nordaccount.com/dashboard/nordvpn/manual-configuration/service-credentials/"
-        openvpn_user="$(prompt_secret "NordVPN service username")"
-        openvpn_password="$(prompt_secret "NordVPN service password")"
+        OPENVPN_USER="$(prompt_secret "NordVPN service username")"
+        OPENVPN_PASSWORD="$(prompt_secret "NordVPN service password")"
     else
         print_step "NordLynx Private Key"
         print_info "Get key via: curl -s -u token:<YOUR_TOKEN> https://api.nordvpn.com/v1/users/services/credentials | jq -r .nordlynx_private_key"
         while true; do
-            wireguard_private_key="$(prompt_secret "NordLynx private key")"
-            local klen=${#wireguard_private_key}
+            WIREGUARD_PRIVATE_KEY="$(prompt_secret "NordLynx private key")"
+            local klen=${#WIREGUARD_PRIVATE_KEY}
             local stars
             printf -v stars '%*s' "$klen" '' && stars="${stars// /\*}"
             printf "  ${COLOR_DIM}%s${COLOR_RESET} ${COLOR_CYAN}(%d chars)${COLOR_RESET}\n" "$stars" "$klen" >&2
@@ -528,66 +528,156 @@ configure_env() {
             print_warn "Key too short (${klen} chars). NordLynx key must be ≥ 44 chars."
         done
     fi
+}
 
+step_vpn_location() {
     print_step "VPN Location"
     _city_tmp_init
-    server_countries="$(choose_nord_location)"
+    SERVER_COUNTRIES="$(choose_nord_location)"
     _city_tmp_read
-    server_cities="${SELECTED_CITY:-}"
-    firewall_subnets="$(prompt_default "Host LAN CIDR for kill-switch bypass (FIREWALL_OUTBOUND_SUBNETS)" "192.168.50.145/32")"
+    SERVER_CITIES="${SELECTED_CITY:-}"
+    FIREWALL_OUTBOUND_SUBNETS="$(prompt_default "Host LAN CIDR for kill-switch bypass (FIREWALL_OUTBOUND_SUBNETS)" "${FIREWALL_OUTBOUND_SUBNETS:-192.168.50.145/32}")"
+}
 
+step_hotspot_settings() {
     print_step "Hotspot Settings"
-    ap_ssid="$(prompt_default "SSID" "NordVPN AP")"
+    AP_SSID="$(prompt_default "SSID" "${AP_SSID:-NordVPN AP}")"
     while true; do
-        ap_password="$(prompt_secret "Password (min 8 chars)")"
-        [[ ${#ap_password} -ge 8 ]] && break
+        AP_PASSWORD="$(prompt_secret "Password (min 8 chars)")"
+        [[ ${#AP_PASSWORD} -ge 8 ]] && break
         print_warn "Password must be ≥ 8 chars."
     done
-    ap_channel="$(prompt_default "WiFi channel" "6")"
-    ap_ip="$(prompt_default "Gateway IP" "192.168.60.1")"
-    ap_subnet="$(prompt_default "Subnet CIDR" "192.168.60.0/24")"
+    AP_CHANNEL="$(prompt_default "WiFi channel" "${AP_CHANNEL:-6}")"
+    AP_IP="$(prompt_default "Gateway IP" "${AP_IP:-192.168.60.1}")"
+    AP_SUBNET="$(prompt_default "Subnet CIDR" "${AP_SUBNET:-192.168.60.0/24}")"
+}
 
+step_security_settings() {
     print_step "WiFi Security"
     local sec_options=("wpa2" "wpa3" "mixed")
     local sec_labels=("WPA2-PSK (Default)" "WPA3-SAE (Modern, requires newer devices)" "WPA2/WPA3 Mixed Mode")
-    ap_security="$(select_with_arrows "Select security mode (↑↓ + Enter)" sec_options sec_labels 0)"
+    local idx
+    idx=$(find_index "${AP_SECURITY:-wpa2}" sec_options)
+    AP_SECURITY="$(select_with_arrows "Select security mode (↑↓ + Enter)" sec_options sec_labels "$idx")"
+}
 
+save_env() {
     cat > "$ENV_FILE" <<EOF
 # Runtime profile
-VPN_TYPE=${vpn_type}
+VPN_TYPE=${VPN_TYPE}
 
 # NordVPN Credentials (OpenVPN)
-OPENVPN_USER=${openvpn_user}
-OPENVPN_PASSWORD=${openvpn_password}
+OPENVPN_USER=${OPENVPN_USER:-}
+OPENVPN_PASSWORD=${OPENVPN_PASSWORD:-}
 
 # NordVPN Credentials (WireGuard / NordLynx)
-WIREGUARD_PRIVATE_KEY=${wireguard_private_key}
+WIREGUARD_PRIVATE_KEY=${WIREGUARD_PRIVATE_KEY:-}
 
 # Shared VPN Settings
-SERVER_COUNTRIES=${server_countries}
-SERVER_CITIES=${server_cities}
-FIREWALL_OUTBOUND_SUBNETS=${firewall_subnets}
+SERVER_COUNTRIES=${SERVER_COUNTRIES}
+SERVER_CITIES=${SERVER_CITIES}
+FIREWALL_OUTBOUND_SUBNETS=${FIREWALL_OUTBOUND_SUBNETS}
 
 # Access Point Settings
-AP_IFACE=${ap_iface}
-AP_SSID=${ap_ssid}
-AP_PASSWORD=${ap_password}
-AP_CHANNEL=${ap_channel}
-AP_IP=${ap_ip}
-AP_SUBNET=${ap_subnet}
-AP_SECURITY=${ap_security}
+AP_IFACE=${AP_IFACE}
+AP_SSID=${AP_SSID}
+AP_PASSWORD=${AP_PASSWORD}
+AP_CHANNEL=${AP_CHANNEL}
+AP_IP=${AP_IP}
+AP_SUBNET=${AP_SUBNET}
+AP_SECURITY=${AP_SECURITY}
 EOF
-
     chmod 600 "$ENV_FILE"
-    SELECTED_VPN_TYPE="${vpn_type}"
-    print_summary "$ap_iface" "$vpn_type" "$ap_ssid" "$ap_ip" "$server_countries" "${server_cities:-any}"
+    print_success "Configuration saved to .env"
+}
+
+load_env() {
+    if [[ -f "$ENV_FILE" ]]; then
+        # Use a subshell to avoid polluting current shell if we only want to read, 
+        # but here we actually want to load them.
+        set -a
+        # shellcheck disable=SC1090
+        source "$ENV_FILE"
+        set +a
+    fi
+}
+
+configure_env_full() {
+    # Initialize variables if not set
+    VPN_TYPE="${VPN_TYPE:-wireguard}"
+    OPENVPN_USER="${OPENVPN_USER:-}"
+    OPENVPN_PASSWORD="${OPENVPN_PASSWORD:-}"
+    WIREGUARD_PRIVATE_KEY="${WIREGUARD_PRIVATE_KEY:-}"
+    SERVER_COUNTRIES="${SERVER_COUNTRIES:-}"
+    SERVER_CITIES="${SERVER_CITIES:-}"
+    FIREWALL_OUTBOUND_SUBNETS="${FIREWALL_OUTBOUND_SUBNETS:-}"
+    AP_IFACE="${AP_IFACE:-}"
+    AP_SSID="${AP_SSID:-}"
+    AP_PASSWORD="${AP_PASSWORD:-}"
+    AP_CHANNEL="${AP_CHANNEL:-}"
+    AP_IP="${AP_IP:-}"
+    AP_SUBNET="${AP_SUBNET:-}"
+    AP_SECURITY="${AP_SECURITY:-}"
+
+    step_network_interface
+    step_vpn_protocol
+    step_vpn_credentials
+    step_vpn_location
+    step_hotspot_settings
+    step_security_settings
+
+    save_env
+    SELECTED_VPN_TYPE="${VPN_TYPE}"
+    print_summary "$AP_IFACE" "$VPN_TYPE" "$AP_SSID" "$AP_IP" "$SERVER_COUNTRIES" "${SERVER_CITIES:-any}"
+}
+
+configure_env_selective() {
+    load_env
+    
+    local options=("network" "vpn_type" "vpn_creds" "location" "hotspot" "security" "save_exit")
+    local labels=(
+        "Network Interface       [${AP_IFACE:-not set}]"
+        "VPN Protocol            [${VPN_TYPE:-not set}]"
+        "VPN Credentials         [********]"
+        "VPN Location            [${SERVER_COUNTRIES:-any} / ${SERVER_CITIES:-any}]"
+        "Hotspot (SSID/IP)       [${AP_SSID:-not set}]"
+        "WiFi Security           [${AP_SECURITY:-not set}]"
+        "${COLOR_GREEN}Save and Continue${COLOR_RESET}"
+    )
+
+    while true; do
+        local choice
+        choice=$(select_with_arrows "Select section to update (↑↓ + Enter):" options labels 0)
+
+        case "$choice" in
+            network)  step_network_interface ;;
+            vpn_type) step_vpn_protocol ;;
+            vpn_creds) step_vpn_credentials ;;
+            location) step_vpn_location ;;
+            hotspot)  step_hotspot_settings ;;
+            security) step_security_settings ;;
+            save_exit) 
+                save_env
+                SELECTED_VPN_TYPE="${VPN_TYPE}"
+                print_summary "$AP_IFACE" "$VPN_TYPE" "$AP_SSID" "$AP_IP" "$SERVER_COUNTRIES" "${SERVER_CITIES:-any}"
+                return 0 
+                ;;
+        esac
+        
+        # Update labels after change
+        labels=(
+            "Network Interface       [${AP_IFACE:-not set}]"
+            "VPN Protocol            [${VPN_TYPE:-not set}]"
+            "VPN Credentials         [********]"
+            "VPN Location            [${SERVER_COUNTRIES:-any} / ${SERVER_CITIES:-any}]"
+            "Hotspot (SSID/IP)       [${AP_SSID:-not set}]"
+            "WiFi Security           [${AP_SECURITY:-not set}]"
+            "${COLOR_GREEN}Save and Continue${COLOR_RESET}"
+        )
+    done
 }
 
 # ─── VPN type change cleanup ──────────────────────────────────────────────────
-
-get_vpn_type_from_env_file() {
-    awk -F= '/^VPN_TYPE=/{print $2; exit}' "$1" 2>/dev/null || true
-}
 
 handle_vpn_type_change_cleanup() {
     local prev="$1" new="$2"
@@ -609,25 +699,35 @@ main() {
     cd "$ROOT_DIR"
     setup_colors
     print_banner
-    check_running_named_containers
+    check_running_containers
 
     local previous_vpn_type=""
 
     if [[ -f "$ENV_FILE" ]]; then
-        previous_vpn_type="$(get_vpn_type_from_env_file "$ENV_FILE")"
-        local reuse
-        read -r -p "  ${COLOR_BOLD}Existing .env found. Reuse it?${COLOR_RESET} [Y/n]: " reuse
-        reuse="${reuse:-Y}"
-        if [[ "$reuse" =~ ^[Nn]$ ]]; then
-            CURRENT_STEP=0
-            configure_env
-        else
-            SELECTED_VPN_TYPE="$previous_vpn_type"
-            print_info "Using existing .env (VPN: ${SELECTED_VPN_TYPE})"
-        fi
+        load_env
+        previous_vpn_type="${VPN_TYPE:-}"
+        
+        local menu_options=("reuse" "selective" "full")
+        local menu_labels=("Reuse existing .env as-is" "Edit selected values" "Full reconfiguration (overwrite)")
+        
+        local mode
+        mode=$(select_with_arrows "Existing .env found. How to proceed?" menu_options menu_labels 0)
+        
+        case "$mode" in
+            reuse)
+                SELECTED_VPN_TYPE="$previous_vpn_type"
+                print_info "Using existing .env (VPN: ${SELECTED_VPN_TYPE})"
+                ;;
+            selective)
+                configure_env_selective
+                ;;
+            full)
+                configure_env_full
+                ;;
+        esac
     else
         print_info "No .env found — running first-time setup…"
-        configure_env
+        configure_env_full
     fi
 
     handle_vpn_type_change_cleanup "$previous_vpn_type" "$SELECTED_VPN_TYPE"
