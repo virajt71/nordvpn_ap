@@ -66,9 +66,10 @@ graph LR
     GT1 --> I((Internet))
     GT2 --> I
 
-    classDef default fill:#f9f9f9,stroke:#333,stroke-width:1px;
-    class GT1,GT2 fill:#4a90d9,color:#fff;
-    class AP1,AP2 fill:#00c896,color:#fff;
+    classDef vpnStyle fill:#4a90d9,stroke:#333,stroke-width:2px,color:#fff;
+    classDef apStyle fill:#00c896,stroke:#333,stroke-width:2px,color:#fff;
+    class GT1,GT2 vpnStyle;
+    class AP1,AP2 apStyle;
 ```
 
 ---
