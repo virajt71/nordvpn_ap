@@ -505,10 +505,65 @@ configure_env_selective() {
     done
 }
 
+# ─── Dependency Check ─────────────────────────────────────────────────────────
+
+check_dependencies() {
+    local dep_file="${ROOT_DIR}/.deps_ok"
+    [[ -f "$dep_file" ]] && return 0
+
+    local missing=()
+    local deps=("curl" "jq" "fzf" "docker")
+    
+    for d in "${deps[@]}"; do
+        if ! command -v "$d" >/dev/null 2>&1; then
+            missing+=("$d")
+        fi
+    done
+
+    # Check for docker compose (v2) or docker-compose (v1)
+    if ! docker compose version >/dev/null 2>&1 && ! command -v docker-compose >/dev/null 2>&1; then
+        missing+=("docker-compose")
+    fi
+
+    if [[ ${#missing[@]} -eq 0 ]]; then
+        touch "$dep_file"
+        return 0
+    fi
+
+    print_error "Missing required dependencies: ${missing[*]}"
+    
+    local os_id="unknown"
+    if [[ -f /etc/os-release ]]; then
+        os_id=$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
+    fi
+
+    echo >&2
+    case "$os_id" in
+        ubuntu|debian|raspberrypi|pop|mint)
+            print_info "To install on $os_id:"
+            echo "  sudo apt update && sudo apt install -y ${missing[*]}" >&2
+            ;;
+        fedora)
+            print_info "To install on Fedora:"
+            echo "  sudo dnf install -y ${missing[*]}" >&2
+            ;;
+        arch|manjaro)
+            print_info "To install on Arch:"
+            echo "  sudo pacman -S ${missing[*]}" >&2
+            ;;
+        *)
+            print_info "Please install the following packages using your package manager: ${missing[*]}"
+            ;;
+    esac
+    echo >&2
+    exit 1
+}
+
 # ─── Main ─────────────────────────────────────────────────────────────────────
 main() {
     cd "$ROOT_DIR"
     setup_colors
+    check_dependencies
     print_banner
 
     load_credentials
