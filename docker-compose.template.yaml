@@ -1,19 +1,13 @@
 services:
   gluetun:
     image: qmcgaw/gluetun
-    container_name: gluetun
+    container_name: gluetun-${INSTANCE}
     cap_add:
       - NET_ADMIN
     devices:
       - /dev/net/tun:/dev/net/tun
-    ports:
-      - 8888:8888/tcp
-      - 8388:8388/tcp
-      - 8388:8388/udp
     volumes:
-      - ./config:/gluetun
-    env_file:
-      - .env
+      - ./country/${INSTANCE}/gluetun-state:/gluetun
     environment:
       - VPN_SERVICE_PROVIDER=nordvpn
       - VPN_TYPE=${VPN_TYPE}
@@ -37,12 +31,23 @@ services:
     build:
       context: .
       dockerfile: access_point/Dockerfile.wifi-ap
-    container_name: wifi-ap
+    image: wifi-ap-image-${INSTANCE}
+    container_name: wifi-ap-${INSTANCE}
     network_mode: host
     pid: host
     privileged: true
-    env_file:
-      - .env
+    environment:
+      - AP_IFACE=${AP_IFACE}
+      - AP_SSID=${AP_SSID}
+      - AP_PASSWORD=${AP_PASSWORD}
+      - AP_CHANNEL=${AP_CHANNEL}
+      - AP_HW_MODE=${AP_HW_MODE:-g}
+      - AP_CHANNEL_WIDTH=${AP_CHANNEL_WIDTH:-20}
+      - AP_IP=${AP_IP}
+      - AP_SUBNET=${AP_SUBNET}
+      - AP_SECURITY=${AP_SECURITY:-wpa2}
+      - ROUTING_TABLE=${ROUTING_TABLE}
+      - INSTANCE=${INSTANCE}
     depends_on:
       gluetun:
         condition: service_healthy

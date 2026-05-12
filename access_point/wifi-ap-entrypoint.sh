@@ -10,7 +10,11 @@ AP_CHANNEL="${AP_CHANNEL:-6}"
 AP_HW_MODE="${AP_HW_MODE:-g}"
 AP_CHANNEL_WIDTH="${AP_CHANNEL_WIDTH:-20}"
 AP_SECURITY="${AP_SECURITY:-wpa2}"
-ROUTING_TABLE=100
+INSTANCE="${INSTANCE:-vpn0}"
+# ROUTING_TABLE must not collide across instances; pass explicitly from .env
+ROUTING_TABLE="${ROUTING_TABLE:-100}"
+
+TAG="[wifi-ap/${INSTANCE}]"
 
 find_vpn_pid() {
     for pid in /proc/[0-9]*/net/dev; do
@@ -20,7 +24,7 @@ find_vpn_pid() {
 }
 
 write_hostapd_conf() {
-    cat > /tmp/hostapd.conf <<EOF
+    cat > /tmp/hostapd-${INSTANCE}.conf <<EOF
 interface=${AP_IFACE}
 driver=nl80211
 ssid=${AP_SSID}
@@ -33,8 +37,7 @@ EOF
 
     case "${AP_SECURITY,,}" in
         wpa3)
-            echo "==> [wifi-ap] Security: WPA3-SAE"
-            cat >> /tmp/hostapd.conf <<EOF
+            cat >> /tmp/hostapd-${INSTANCE}.conf <<EOF
 wpa=2
 wpa_key_mgmt=SAE
 rsn_pairwise=CCMP
@@ -43,8 +46,7 @@ sae_password=${AP_PASSWORD}
 EOF
             ;;
         wpa2-wpa3|mixed)
-            echo "==> [wifi-ap] Security: WPA2/WPA3 Mixed Mode"
-            cat >> /tmp/hostapd.conf <<EOF
+            cat >> /tmp/hostapd-${INSTANCE}.conf <<EOF
 wpa=2
 wpa_key_mgmt=WPA-PSK SAE
 rsn_pairwise=CCMP
@@ -54,8 +56,7 @@ sae_password=${AP_PASSWORD}
 EOF
             ;;
         *)
-            echo "==> [wifi-ap] Security: WPA2-PSK (default)"
-            cat >> /tmp/hostapd.conf <<EOF
+            cat >> /tmp/hostapd-${INSTANCE}.conf <<EOF
 wpa=2
 wpa_key_mgmt=WPA-PSK
 rsn_pairwise=CCMP
@@ -64,26 +65,25 @@ EOF
             ;;
     esac
 
-    cat >> /tmp/hostapd.conf <<EOF
+    cat >> /tmp/hostapd-${INSTANCE}.conf <<EOF
 logger_syslog=-1
 logger_syslog_level=2
 logger_stdout=-1
 logger_stdout_level=2
 EOF
 
-    # Add 5GHz/AC/AX specific settings if needed
     if [[ "$AP_HW_MODE" == "a" || "$AP_HW_MODE" == "ac" || "$AP_HW_MODE" == "ax" ]]; then
         {
             echo "ieee80211ac=1"
             [[ "$AP_HW_MODE" == "ax" ]] && echo "ieee80211ax=1"
-        } >> /tmp/hostapd.conf
+        } >> /tmp/hostapd-${INSTANCE}.conf
     fi
 }
 
 write_dnsmasq_conf() {
     local dhcp_base
     dhcp_base="$(echo "$AP_IP" | awk -F. '{print $1"."$2"."$3}')"
-    cat > /tmp/dnsmasq.conf <<EOF
+    cat > /tmp/dnsmasq-${INSTANCE}.conf <<EOF
 interface=${AP_IFACE}
 bind-interfaces
 no-daemon
@@ -93,7 +93,7 @@ dhcp-option=6,103.86.96.100,103.86.99.100
 no-resolv
 server=103.86.96.100
 server=103.86.99.100
-dhcp-leasefile=/tmp/dnsmasq-ap.leases
+dhcp-leasefile=/tmp/dnsmasq-${INSTANCE}.leases
 EOF
 }
 
@@ -109,12 +109,14 @@ setup_routing() {
         bridge=$(ip link | sed -n 's/.*\(br-[a-f0-9]\+\).*/\1/p' | head -1)
     fi
 
-    echo "  Gluetun IP : $gip  |  Bridge GW : $gw  |  Bridge dev : $bridge"
+    echo "  ${TAG} Gluetun IP : $gip  |  Bridge GW : $gw  |  Bridge dev : $bridge  |  RT : $ROUTING_TABLE"
 
     sysctl -qw net.ipv4.ip_forward=1
+
+    # Clean old rules for this routing table before re-adding
     ip rule del from "$AP_SUBNET" lookup $ROUTING_TABLE 2>/dev/null || true
     ip route flush table $ROUTING_TABLE 2>/dev/null || true
-    ip rule add from "$AP_SUBNET" lookup $ROUTING_TABLE priority 100
+    ip rule add from "$AP_SUBNET" lookup $ROUTING_TABLE priority $(( 100 + ROUTING_TABLE ))
     ip route add default via "$gip" dev "$bridge" table $ROUTING_TABLE
 
     iptables -D FORWARD -i "$AP_IFACE" -o "$bridge" -j ACCEPT 2>/dev/null || true
@@ -137,9 +139,9 @@ EOF
 }
 
 cleanup() {
-    echo "==> [wifi-ap] Shutting down..."
-    pkill -f "hostapd /tmp/hostapd.conf" 2>/dev/null || true
-    pkill dnsmasq 2>/dev/null || true
+    echo "==> ${TAG} Shutting down..."
+    pkill -f "hostapd /tmp/hostapd-${INSTANCE}.conf" 2>/dev/null || true
+    pkill -f "dnsmasq --conf-file=/tmp/dnsmasq-${INSTANCE}.conf" 2>/dev/null || true
     ip rule del from "$AP_SUBNET" lookup $ROUTING_TABLE 2>/dev/null || true
     ip route flush table $ROUTING_TABLE 2>/dev/null || true
     ip addr flush dev "$AP_IFACE" 2>/dev/null || true
@@ -157,7 +159,7 @@ cleanup() {
 }
 trap cleanup SIGTERM SIGINT SIGQUIT
 
-echo "==> [wifi-ap] Waiting for VPN tunnel (tun0)..."
+echo "==> ${TAG} Waiting for VPN tunnel (tun0)..."
 GLUETUN_PID=""
 for i in $(seq 1 30); do
     GLUETUN_PID=$(find_vpn_pid 2>/dev/null || true)
@@ -165,68 +167,68 @@ for i in $(seq 1 30); do
     echo "  [$i/30] Not ready yet, waiting 2s..."
     sleep 2
 done
-[[ -z "$GLUETUN_PID" ]] && { echo "ERROR: VPN tun0 not found after 60s. Is gluetun connected?"; exit 1; }
+[[ -z "$GLUETUN_PID" ]] && { echo "ERROR ${TAG}: VPN tun0 not found after 60s."; exit 1; }
 
 write_hostapd_conf
 write_dnsmasq_conf
 
-echo "==> [wifi-ap] Configuring $AP_IFACE..."
+echo "==> ${TAG} Configuring $AP_IFACE..."
 ip link set "$AP_IFACE" down 2>/dev/null || true
 ip addr flush dev "$AP_IFACE" 2>/dev/null || true
 ip addr add "$AP_IP/24" dev "$AP_IFACE"
 ip link set "$AP_IFACE" up
 
-# Background loop to ensure IP stays (NetworkManager fix)
 (
     while true; do
         if ! ip addr show "$AP_IFACE" | grep -q "$AP_IP"; then
-            echo "  [keep-alive] Restoring IP $AP_IP to $AP_IFACE"
+            echo "  [keep-alive/${INSTANCE}] Restoring IP $AP_IP to $AP_IFACE"
             ip addr add "$AP_IP/24" dev "$AP_IFACE" 2>/dev/null || true
         fi
         sleep 5
     done
 ) &
 
-echo "==> [wifi-ap] Starting hostapd..."
-hostapd /tmp/hostapd.conf &
+echo "==> ${TAG} Starting hostapd..."
+hostapd /tmp/hostapd-${INSTANCE}.conf &
 HOSTAPD_PID=$!
 sleep 2
 
-echo "==> [wifi-ap] Starting dnsmasq..."
-dnsmasq --conf-file=/tmp/dnsmasq.conf --no-daemon &
+echo "==> ${TAG} Starting dnsmasq..."
+dnsmasq --conf-file=/tmp/dnsmasq-${INSTANCE}.conf --no-daemon &
 sleep 1
 
-echo "==> [wifi-ap] Setting up VPN routing..."
+echo "==> ${TAG} Setting up VPN routing (table ${ROUTING_TABLE})..."
 setup_routing "$GLUETUN_PID"
 
 echo ""
 echo "╔═══════════════════════════════════════════╗"
-echo "║   NordVPN WiFi AP is LIVE (Docker)       ║"
-echo "║   SSID    : ${AP_SSID}"
-echo "║   Password: ${AP_PASSWORD}"
-echo "║   Gateway : ${AP_IP}"
+echo "║  NordVPN WiFi AP LIVE  [${INSTANCE}]"
+echo "║  SSID    : ${AP_SSID}"
+echo "║  Password: ${AP_PASSWORD}"
+echo "║  Gateway : ${AP_IP}"
+echo "║  RT      : ${ROUTING_TABLE}"
 echo "╚═══════════════════════════════════════════╝"
 
 while true; do
     sleep 15
 
     if ! kill -0 "$HOSTAPD_PID" 2>/dev/null; then
-        echo "WARN: hostapd died, restarting..."
-        hostapd /tmp/hostapd.conf &
+        echo "WARN ${TAG}: hostapd died, restarting..."
+        hostapd /tmp/hostapd-${INSTANCE}.conf &
         HOSTAPD_PID=$!
         sleep 2
     fi
 
     CURRENT_PID=$(find_vpn_pid 2>/dev/null || true)
     if [[ -z "$CURRENT_PID" ]]; then
-        echo "WARN: tun0 gone (VPN reconnecting)..."
+        echo "WARN ${TAG}: tun0 gone (VPN reconnecting)..."
         for _ in $(seq 1 15); do
             CURRENT_PID=$(find_vpn_pid 2>/dev/null || true)
             [[ -n "$CURRENT_PID" ]] && break
             sleep 2
         done
         if [[ -n "$CURRENT_PID" ]]; then
-            echo "==> VPN back up, reapplying routing..."
+            echo "==> ${TAG} VPN back up, reapplying routing..."
             GLUETUN_PID=$CURRENT_PID
             setup_routing "$GLUETUN_PID"
         fi
