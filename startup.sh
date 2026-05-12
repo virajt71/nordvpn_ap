@@ -11,25 +11,22 @@ ENV_FILE=""
 
 RC_ESC=2
 
-# Colors
-COLOR_RESET=""
-COLOR_BOLD=""
-COLOR_DIM=""
-COLOR_BLUE=""
-COLOR_CYAN=""
-COLOR_GREEN=""
-COLOR_YELLOW=""
-COLOR_RED=""
-COLOR_WHITE=""
+# ─── Colors ───────────────────────────────────────────────────────────────────
+COLOR_RESET="" COLOR_BOLD="" COLOR_DIM=""
+COLOR_BLUE=""  COLOR_CYAN="" COLOR_GREEN=""
+COLOR_YELLOW="" COLOR_RED="" COLOR_WHITE=""
 
 setup_colors() {
-    if [[ -t 2 ]] && command -v tput >/dev/null 2>&1; then
-        COLOR_RESET="$(tput sgr0)"; COLOR_BOLD="$(tput bold)"
-        COLOR_DIM="$(tput dim 2>/dev/null||echo)"
-        COLOR_BLUE="$(tput setaf 4)"; COLOR_CYAN="$(tput setaf 6)"
-        COLOR_GREEN="$(tput setaf 2)"; COLOR_YELLOW="$(tput setaf 3)"
-        COLOR_RED="$(tput setaf 1)"; COLOR_WHITE="$(tput setaf 7)"
-    fi
+    [[ -t 2 ]] && command -v tput >/dev/null 2>&1 || return 0
+    COLOR_RESET="$(tput sgr0)"
+    COLOR_BOLD="$(tput bold)"
+    COLOR_DIM="$(tput dim 2>/dev/null || true)"
+    COLOR_BLUE="$(tput setaf 4)"
+    COLOR_CYAN="$(tput setaf 6)"
+    COLOR_GREEN="$(tput setaf 2)"
+    COLOR_YELLOW="$(tput setaf 3)"
+    COLOR_RED="$(tput setaf 1)"
+    COLOR_WHITE="$(tput setaf 7)"
 }
 
 print_info()    { echo "${COLOR_CYAN}  ℹ  $1${COLOR_RESET}" >&2; }
@@ -49,29 +46,52 @@ print_banner() {
     echo >&2
 }
 
+# ─── Spinner ──────────────────────────────────────────────────────────────────
 SPINNER_PID=""
 
 spinner_start() {
     local msg="${1:-Working...}"
     local frames=('⠋' '⠙' '⠹' '⠸' '⠼' '⠴' '⠦' '⠧' '⠇' '⠏')
-    ( local i=0
-      while true; do
-          printf "\r${COLOR_CYAN}  %s  %s${COLOR_RESET}" "${frames[$i]}" "$msg" >&2
-          (( i = (i + 1) % ${#frames[@]} ))
-          sleep 0.08
-      done
+    (
+        local i=0
+        while true; do
+            printf "\r${COLOR_CYAN}  %s  %s${COLOR_RESET}" "${frames[$i]}" "$msg" >&2
+            (( i = (i + 1) % ${#frames[@]} ))
+            sleep 0.08
+        done
     ) &
     SPINNER_PID=$!
     disown "$SPINNER_PID" 2>/dev/null || true
 }
 
 spinner_stop() {
-    [[ -n "$SPINNER_PID" ]] && { kill "$SPINNER_PID" 2>/dev/null||true; wait "$SPINNER_PID" 2>/dev/null||true; SPINNER_PID=""; }
+    if [[ -n "$SPINNER_PID" ]]; then
+        kill "$SPINNER_PID" 2>/dev/null || true
+        wait "$SPINNER_PID" 2>/dev/null || true
+        SPINNER_PID=""
+    fi
     printf "\r\033[2K" >&2
     [[ "${1:-}" == "fail" ]] && print_error "Failed."
 }
 
-# ─── Key Reading ──────────────────────────────────────────────────────────────
+# ─── Cleanup trap ─────────────────────────────────────────────────────────────
+_TMPFILES=()
+
+_cleanup() {
+    spinner_stop 2>/dev/null || true
+    for f in "${_TMPFILES[@]:-}"; do
+        [[ -n "$f" && -f "$f" ]] && rm -f "$f"
+    done
+}
+trap _cleanup EXIT
+
+tmpfile_new() {
+    local f; f="$(mktemp /tmp/.nordap.XXXXXX)"
+    _TMPFILES+=("$f")
+    echo "$f"
+}
+
+# ─── Key reading ──────────────────────────────────────────────────────────────
 KEY_SEQ=""
 read_key() {
     local k1 k2 k3
@@ -94,37 +114,42 @@ read_key() {
     fi
 }
 
+# ─── Menu ─────────────────────────────────────────────────────────────────────
 _render_menu() {
     local prompt="$1" idx="$2" hint="$3"
-    local -n _rm="$4"
-    local count=${#_rm[@]} i
+    local -n _rm_items="$4"
+    local count=${#_rm_items[@]} i
     printf "  ${COLOR_BOLD}%s${COLOR_RESET}\n" "$prompt" >&2
     printf "  ${COLOR_DIM}%s${COLOR_RESET}\n"  "$hint"   >&2
     for (( i=0; i<count; i++ )); do
         if (( i == idx )); then
-            printf "    ${COLOR_GREEN}▶ ${COLOR_BOLD}%s${COLOR_RESET}\n" "${_rm[$i]}" >&2
+            printf "    ${COLOR_GREEN}▶ ${COLOR_BOLD}%s${COLOR_RESET}\n" "${_rm_items[$i]}" >&2
         else
-            printf "      ${COLOR_DIM}%s${COLOR_RESET}\n" "${_rm[$i]}" >&2
+            printf "      ${COLOR_DIM}%s${COLOR_RESET}\n" "${_rm_items[$i]}" >&2
         fi
     done
 }
 
+# select_menu <prompt> <values_nameref> <labels_nameref> [initial_idx] [hint]
+# prints selected value to stdout; returns RC_ESC on Escape
 select_menu() {
     local prompt="$1"
-    local -n _sm_o="$2"
-    local -n _sm_l="$3"
+    local -n _sm_vals="$2"
+    local -n _sm_lbls="$3"
     local idx="${4:-0}"
     local hint="${5:-↑↓ navigate  ·  Enter select  ·  Esc back}"
-    local count=${#_sm_o[@]}
+    local count=${#_sm_vals[@]}
+
     [[ $count -eq 0 ]] && return 1
 
+    # Non-interactive fallback
     if [[ ! -t 0 || ! -t 2 ]] || ! command -v tput >/dev/null 2>&1; then
         local fb
         while true; do
             printf "  %s [1-%d]: " "$prompt" "$count" >&2
             read -r fb
             if [[ "$fb" =~ ^[0-9]+$ ]] && (( fb >= 1 && fb <= count )); then
-                printf '%s' "${_sm_o[$((fb-1))]}"; return 0
+                printf '%s' "${_sm_vals[$((fb-1))]}"; return 0
             fi
             print_warn "Enter a number 1–$count."
         done
@@ -137,18 +162,20 @@ select_menu() {
         read_key
         case "$KEY_SEQ" in
             UP)
-                (( idx-- )) || true; (( idx < 0 )) && idx=$(( count - 1 ))
+                (( idx-- )) || true
+                (( idx < 0 )) && idx=$(( count - 1 ))
                 tput cuu "$lines" >&2
                 _render_menu "$prompt" "$idx" "$hint" "$3"
                 ;;
             DOWN)
-                (( idx++ )) || true; (( idx >= count )) && idx=0
+                (( idx++ )) || true
+                (( idx >= count )) && idx=0
                 tput cuu "$lines" >&2
                 _render_menu "$prompt" "$idx" "$hint" "$3"
                 ;;
             ENTER)
                 echo >&2
-                printf '%s' "${_sm_o[$idx]}"; return 0
+                printf '%s' "${_sm_vals[$idx]}"; return 0
                 ;;
             ESC)
                 local j
@@ -160,8 +187,11 @@ select_menu() {
 }
 
 find_index() {
-    local val="$1"; local -n _fi="$2"
-    local i; for i in "${!_fi[@]}"; do [[ "${_fi[$i]}" == "$val" ]] && { echo "$i"; return; }; done
+    local val="$1"; local -n _fi_arr="$2"
+    local i
+    for i in "${!_fi_arr[@]}"; do
+        [[ "${_fi_arr[$i]}" == "$val" ]] && { echo "$i"; return; }
+    done
     echo 0
 }
 
@@ -180,6 +210,7 @@ prompt_secret() {
         else
             printf "  ${COLOR_BOLD}%s${COLOR_RESET}: " "$prompt" >&2
         fi
+        value=""
         while IFS= read -r -s -n1 char; do
             case "$char" in
                 ''|$'\n'|$'\r') break ;;
@@ -190,8 +221,7 @@ prompt_secret() {
         done
         printf "\n" >&2
         if [[ -z "$value" && -n "$default" ]]; then
-            value="$default"
-            break
+            value="$default"; break
         elif [[ -n "$value" ]]; then
             break
         else
@@ -201,6 +231,7 @@ prompt_secret() {
     printf '%s' "$value"
 }
 
+# ─── WiFi interface ───────────────────────────────────────────────────────────
 list_wifi_interfaces() {
     for p in /sys/class/net/*; do
         local iface; iface="$(basename "$p")"
@@ -209,23 +240,25 @@ list_wifi_interfaces() {
 }
 
 choose_wifi_interface() {
-    local interfaces=() labels=()
+    local interfaces=()
     mapfile -t interfaces < <(list_wifi_interfaces)
 
+    # Collect interfaces already claimed by other instances
     local used_ifaces=()
     mapfile -t used_ifaces < <(
-        find "${ROOT_DIR}/country" -name '.env' -exec grep -h '^AP_IFACE=' {} \; 2>/dev/null | cut -d= -f2 || true
+        find "${ROOT_DIR}/country" -name '.env' \
+            -exec grep -h '^AP_IFACE=' {} \; 2>/dev/null | cut -d= -f2 || true
     )
 
     local available=()
+    local iface
     for iface in "${interfaces[@]}"; do
         local skip=0
+        local used
         for used in "${used_ifaces[@]}"; do
-            if [[ "$iface" == "$used" ]]; then
-                if [[ "$iface" != "${AP_IFACE:-}" ]]; then
-                    skip=1
-                fi
-                break
+            # Allow current instance's own iface
+            if [[ "$iface" == "$used" && "$iface" != "${AP_IFACE:-}" ]]; then
+                skip=1; break
             fi
         done
         (( skip )) && continue
@@ -233,16 +266,16 @@ choose_wifi_interface() {
     done
 
     if [[ ${#available[@]} -eq 0 ]]; then
-        print_warn "No free WiFi interfaces."
-        printf '%s' "wlan1"
+        print_warn "No free WiFi interfaces found."
+        printf '%s' "${AP_IFACE:-wlan0}"
         return 0
     fi
 
-    for iface in "${available[@]}"; do labels+=("$iface"); done
-    local idx; idx=$(find_index "${AP_IFACE:-wlan1}" available)
-    select_menu "Select WiFi interface" available labels "$idx"
+    local idx; idx=$(find_index "${AP_IFACE:-wlan0}" available)
+    select_menu "Select WiFi interface" available available "$idx"
 }
 
+# ─── NordVPN location picker ──────────────────────────────────────────────────
 ensure_nord_cache() {
     local now; now="$(date +%s)"
     if [[ -f "$NORD_CACHE" ]]; then
@@ -256,7 +289,7 @@ ensure_nord_cache() {
     local raw
     if raw="$(curl -sf --max-time 15 "https://api.nordvpn.com/v1/servers/countries")"; then
         echo "$raw" > "$NORD_CACHE"
-        spinner_stop done
+        spinner_stop
         return 0
     else
         spinner_stop fail
@@ -264,58 +297,54 @@ ensure_nord_cache() {
     fi
 }
 
-SELECTED_CITY=""
-_CITY_TMP=""
-
-_city_tmp_init()  { _CITY_TMP="$(mktemp /tmp/.nord_city.XXXXXX)"; : > "$_CITY_TMP"; }
-_city_tmp_set()   { echo "$1" > "$_CITY_TMP"; }
-_city_tmp_read()  { SELECTED_CITY=""; [[ -f "$_CITY_TMP" ]] && SELECTED_CITY="$(cat "$_CITY_TMP")"; rm -f "$_CITY_TMP"; _CITY_TMP=""; }
-
+# Sets SELECTED_COUNTRY and SELECTED_CITY (globals); returns RC_ESC on cancel
 choose_nord_location() {
+    SELECTED_COUNTRY=""
+    SELECTED_CITY=""
+
     if ! ensure_nord_cache; then
-        prompt_default "VPN country" ""
+        SELECTED_COUNTRY="$(prompt_default "VPN country" "")"
         return 0
     fi
+
     if ! command -v fzf >/dev/null 2>&1; then
         local names=()
         mapfile -t names < <(jq -r '.[].name' "$NORD_CACHE" | sort)
-        select_menu "Select Country" names names 0
-        return
+        local r
+        r="$(select_menu "Select Country" names names 0)" || return "$RC_ESC"
+        SELECTED_COUNTRY="$r"
+        return 0
     fi
-    local country city cities_json city_count
-    print_info "Use ↑/↓ arrows or type to search. Enter to confirm. Esc to cancel."
+
+    print_info "Type to search. Enter to confirm. Esc to cancel."
+    local country
     country="$(
         jq -r '.[].name' "$NORD_CACHE" | sort \
         | fzf --prompt "  🌍 Country ❯ " --height=40% --border=rounded \
               --pointer="▶" \
               --color="border:#4a90d9,prompt:#7ec8e3,pointer:#00c896" 2>/dev/tty
     )" || return "$RC_ESC"
-    
-    cities_json="$(jq -r --arg c "$country" '.[] | select(.name==$c) | .cities[].name' "$NORD_CACHE" 2>/dev/null)"
+
+    SELECTED_COUNTRY="$country"
+
+    local cities_json city_count
+    cities_json="$(jq -r --arg c "$country" \
+        '.[] | select(.name==$c) | .cities[].name' "$NORD_CACHE" 2>/dev/null || true)"
     city_count="$(echo "$cities_json" | grep -c '[^[:space:]]' 2>/dev/null || echo 0)"
 
     if (( city_count > 1 )); then
+        local city
         city="$(
             { echo "(Any — country only)"; echo "$cities_json"; } \
             | fzf --prompt "  🏙  City ❯ " --height=40% --border=rounded \
                   --pointer="▶" \
                   --color="border:#4a90d9,prompt:#7ec8e3,pointer:#00c896" 2>/dev/tty
         )" || city="(Any — country only)"
-        [[ "$city" != "(Any — country only)" && -n "$city" ]] && _city_tmp_set "$city"
+        [[ "$city" != "(Any — country only)" && -n "$city" ]] && SELECTED_CITY="$city"
     fi
-    printf '%s' "$country"
 }
 
-# ─── Wizard Steps ─────────────────────────────────────────────────────────────
-
-_step_network_interface() {
-    print_step "Network Interface"
-    local r
-    r="$(choose_wifi_interface)" || return "$RC_ESC"
-    AP_IFACE="$r"
-    print_success "Interface: ${AP_IFACE}"
-}
-
+# ─── Wizard steps ─────────────────────────────────────────────────────────────
 _step_vpn_protocol() {
     print_step "VPN Protocol"
     local opts=("wireguard" "openvpn")
@@ -325,21 +354,15 @@ _step_vpn_protocol() {
     r="$(select_menu "Select VPN protocol" opts lbls "$idx")" || return "$RC_ESC"
     VPN_TYPE="$r"
     print_success "Protocol: ${VPN_TYPE}"
-    return 0
 }
 
 _step_vpn_credentials() {
     local force="${1:-false}"
-    # Check if we already have credentials for the selected type
     if [[ "$force" != "true" ]]; then
         if [[ "${VPN_TYPE:-wireguard}" == "openvpn" ]]; then
-            if [[ -n "${OPENVPN_USER:-}" && -n "${OPENVPN_PASSWORD:-}" ]]; then
-                return 0
-            fi
+            [[ -n "${OPENVPN_USER:-}" && -n "${OPENVPN_PASSWORD:-}" ]] && return 0
         else
-            if [[ -n "${WIREGUARD_PRIVATE_KEY:-}" && ${#WIREGUARD_PRIVATE_KEY} -ge 44 ]]; then
-                return 0
-            fi
+            [[ -n "${WIREGUARD_PRIVATE_KEY:-}" && ${#WIREGUARD_PRIVATE_KEY} -ge 44 ]] && return 0
         fi
     fi
 
@@ -357,16 +380,16 @@ _step_vpn_credentials() {
         done
     fi
     save_credentials
-    return 0
 }
 
 _step_firewall() {
     print_step "Firewall"
-    FIREWALL_OUTBOUND_SUBNETS="$(prompt_default "Host LAN CIDR (kill-switch bypass)" "${FIREWALL_OUTBOUND_SUBNETS:-192.168.50.10/32}")"
-    return 0
+    FIREWALL_OUTBOUND_SUBNETS="$(prompt_default \
+        "Host LAN CIDR (kill-switch bypass)" \
+        "${FIREWALL_OUTBOUND_SUBNETS:-192.168.50.10/32}")"
 }
 
-_step_hotspot_settings() {
+_step_hotspot() {
     print_step "Hotspot Settings"
     AP_SSID="$(prompt_default "SSID" "${AP_SSID:-ap_${INSTANCE}}")"
     [[ "${AP_PASSWORD:-}" == "ChangeMe123!" ]] && AP_PASSWORD=""
@@ -375,13 +398,12 @@ _step_hotspot_settings() {
         [[ ${#AP_PASSWORD} -ge 8 ]] && break
         print_warn "Password must be ≥ 8 chars."
     done
-    AP_CHANNEL="$(prompt_default "WiFi channel" "${AP_CHANNEL:-6}")"
-    AP_IP="$(prompt_default "Gateway IP" "${AP_IP:-192.168.60.1}")"
-    AP_SUBNET="$(prompt_default "Subnet CIDR" "${AP_SUBNET:-192.168.60.0/24}")"
-    return 0
+    AP_CHANNEL="$(prompt_default "WiFi channel"  "${AP_CHANNEL:-6}")"
+    AP_IP="$(prompt_default     "Gateway IP"     "${AP_IP:-192.168.60.1}")"
+    AP_SUBNET="$(prompt_default "Subnet CIDR"    "${AP_SUBNET:-192.168.60.0/24}")"
 }
 
-_step_security_settings() {
+_step_security() {
     print_step "WiFi Security"
     local opts=("wpa2" "wpa3" "mixed")
     local lbls=("WPA2-PSK" "WPA3-SAE" "WPA2/WPA3 Mixed")
@@ -392,9 +414,89 @@ _step_security_settings() {
     print_success "Security: ${AP_SECURITY}"
 }
 
-# ─── Credentials (Global) ─────────────────────────────────────────────────────
+_step_network_interface() {
+    print_step "Network Interface"
+    local r
+    r="$(choose_wifi_interface)" || return "$RC_ESC"
+    AP_IFACE="$r"
+    print_success "Interface: ${AP_IFACE}"
+}
+
+# ─── Full sequential wizard with proper back-navigation ───────────────────────
+configure_env_full() {
+    local step_fns=(
+        _step_vpn_protocol
+        _step_vpn_credentials
+        _step_network_interface
+        _step_firewall
+        _step_hotspot
+        _step_security
+    )
+    local total=${#step_fns[@]}
+    local i=0
+
+    while (( i < total )); do
+        if "${step_fns[$i]}"; then
+            (( i++ ))
+        else
+            local rc=$?
+            if (( rc == RC_ESC )); then
+                if (( i > 0 )); then
+                    (( i-- ))
+                    print_info "Back to previous step."
+                else
+                    print_warn "Already at first step. Esc again to cancel."
+                    # Give user a moment, then check if they want to abort entirely
+                    local abort_opts=("continue" "cancel")
+                    local abort_lbls=("Continue from start" "Cancel setup")
+                    local choice
+                    choice="$(select_menu "First step — what now?" abort_opts abort_lbls 0)" || return "$RC_ESC"
+                    [[ "$choice" == "cancel" ]] && return "$RC_ESC"
+                    # stay at i=0
+                fi
+            else
+                return "$rc"
+            fi
+        fi
+    done
+
+    save_env
+}
+
+# ─── Selective edit menu ──────────────────────────────────────────────────────
+configure_env_selective() {
+    local opts=("protocol" "credentials" "network" "firewall" "hotspot" "security" "done")
+
+    while true; do
+        # Labels rebuilt each iteration so current values reflect edits
+        local lbls=(
+            "VPN Protocol         [${VPN_TYPE:-not set}]"
+            "VPN Credentials      [***]"
+            "Network Interface    [${AP_IFACE:-not set}]"
+            "Firewall Settings    [${FIREWALL_OUTBOUND_SUBNETS:-not set}]"
+            "Hotspot / SSID       [${AP_SSID:-not set}]"
+            "WiFi Security        [${AP_SECURITY:-not set}]"
+            "✔  Save and back to main menu"
+        )
+        local choice
+        choice="$(select_menu "Edit configuration" opts lbls 0 \
+            "↑↓ navigate  ·  Enter edit  ·  Esc → back")" || return "$RC_ESC"
+
+        case "$choice" in
+            done)        save_env; return 0 ;;
+            protocol)    _step_vpn_protocol           || true ;;
+            credentials) _step_vpn_credentials "true" || true ;;
+            network)     _step_network_interface      || true ;;
+            firewall)    _step_firewall                || true ;;
+            hotspot)     _step_hotspot                 || true ;;
+            security)    _step_security                || true ;;
+        esac
+    done
+}
+
+# ─── Credentials ──────────────────────────────────────────────────────────────
 save_credentials() {
-    local old_umask=$(umask)
+    local old_umask; old_umask=$(umask)
     umask 077
     cat > "$CREDENTIALS_FILE" <<EOF
 OPENVPN_USER="${OPENVPN_USER:-}"
@@ -403,19 +505,17 @@ WIREGUARD_PRIVATE_KEY="${WIREGUARD_PRIVATE_KEY:-}"
 EOF
     umask "$old_umask"
     chmod 600 "$CREDENTIALS_FILE"
-    print_success "Credentials saved globally."
+    print_success "Credentials saved."
 }
 
 load_credentials() {
     [[ -f "$CREDENTIALS_FILE" ]] || return 0
-    set -a
-    source "$CREDENTIALS_FILE"
-    set +a
+    set -a; source "$CREDENTIALS_FILE"; set +a
 }
 
-# ─── Env (Per-instance) ───────────────────────────────────────────────────────
+# ─── Per-instance env ─────────────────────────────────────────────────────────
 save_env() {
-    local old_umask=$(umask)
+    local old_umask; old_umask=$(umask)
     umask 077
     cat > "$ENV_FILE" <<EOF
 INSTANCE=${INSTANCE}
@@ -436,92 +536,47 @@ AP_SECURITY=${AP_SECURITY:-wpa2}
 EOF
     umask "$old_umask"
     chmod 600 "$ENV_FILE"
-    
-    # We inject global credentials dynamically in manage.sh or docker-compose, 
     print_success "Config saved: $ENV_FILE"
 }
 
 load_env() {
     [[ -f "$ENV_FILE" ]] || return 0
-    set -a
-    source "$ENV_FILE"
-    set +a
+    set -a; source "$ENV_FILE"; set +a
     load_credentials
 }
 
-configure_env_full() {
-    local -a step_fns=(
-        _step_vpn_protocol
-        _step_vpn_credentials
-        _step_network_interface
-        _step_firewall
-        _step_hotspot_settings
-        _step_security_settings
-    )
-    local i=0
-    while (( i < ${#step_fns[@]} )); do
-        if "${step_fns[$i]}"; then
-            (( i++ )) || true
-        else
-            local rc=$?
-            if (( rc == RC_ESC )); then
-                if (( i > 0 )); then
-                    (( i-- )) || true
-                else
-                    print_warn "Already at first step."
-                fi
-            else
-                return "$rc"
-            fi
-        fi
-    done
-    save_env
+# Reset all instance-scoped vars to avoid cross-iteration bleed
+reset_instance_vars() {
+    INSTANCE="" ENV_FILE=""
+    VPN_TYPE="" OPENVPN_USER="" OPENVPN_PASSWORD="" WIREGUARD_PRIVATE_KEY=""
+    SERVER_COUNTRIES="" SERVER_CITIES=""
+    FIREWALL_OUTBOUND_SUBNETS=""
+    AP_IFACE="" AP_SSID="" AP_PASSWORD=""
+    AP_CHANNEL="" AP_HW_MODE="" AP_CHANNEL_WIDTH=""
+    AP_IP="" AP_SUBNET="" AP_SECURITY=""
+    ROUTING_TABLE=""
+    load_credentials   # re-apply global creds
 }
 
-configure_env_selective() {
-    local opts=("protocol" "credentials" "network" "firewall" "hotspot" "security" "done")
-    while true; do
-        local lbls=(
-            "VPN Protocol         ${COLOR_DIM}[${VPN_TYPE:-not set}]${COLOR_RESET}"
-            "VPN Credentials      ${COLOR_DIM}[***]${COLOR_RESET}"
-            "Network Interface    ${COLOR_DIM}[${AP_IFACE:-not set}]${COLOR_RESET}"
-            "Firewall Settings    ${COLOR_DIM}[${FIREWALL_OUTBOUND_SUBNETS:-not set}]${COLOR_RESET}"
-            "Hotspot / SSID       ${COLOR_DIM}[${AP_SSID:-not set}]${COLOR_RESET}"
-            "WiFi Security        ${COLOR_DIM}[${AP_SECURITY:-not set}]${COLOR_RESET}"
-            "${COLOR_GREEN}${COLOR_BOLD}✔  Save and continue${COLOR_RESET}"
-        )
-        local choice
-        choice="$(select_menu "Edit configuration" opts lbls 0 \
-            "↑↓ navigate  ·  Enter edit  ·  Esc → Back")" || return "$RC_ESC"
-        case "$choice" in
-            done)        save_env; return 0 ;;
-            protocol)    _step_vpn_protocol || true ;;
-            credentials) _step_vpn_credentials "true" || true ;;
-            network)     _step_network_interface || true ;;
-            firewall)    _step_firewall || true ;;
-            hotspot)     _step_hotspot_settings || true ;;
-            security)    _step_security_settings  || true ;;
-        esac
-    done
+is_instance_running() {
+    local name="$1"
+    local ap_st; ap_st="$(docker inspect -f '{{.State.Status}}' "wifi-ap-${name}" 2>/dev/null || true)"
+    local gt_st; gt_st="$(docker inspect -f '{{.State.Status}}' "gluetun-${name}" 2>/dev/null || true)"
+    [[ "$ap_st" == "running" || "$gt_st" == "running" ]]
 }
 
-# ─── Dependency Check ─────────────────────────────────────────────────────────
-
+# ─── Dependency check ─────────────────────────────────────────────────────────
 check_dependencies() {
     local dep_file="${ROOT_DIR}/.deps_ok"
     [[ -f "$dep_file" ]] && return 0
 
-    local missing=()
-    local deps=("curl" "jq" "fzf" "docker")
-    
-    for d in "${deps[@]}"; do
-        if ! command -v "$d" >/dev/null 2>&1; then
-            missing+=("$d")
-        fi
+    local missing=() d
+    for d in curl jq fzf docker; do
+        command -v "$d" >/dev/null 2>&1 || missing+=("$d")
     done
 
-    # Check for docker compose (v2) or docker-compose (v1)
-    if ! docker compose version >/dev/null 2>&1 && ! command -v docker-compose >/dev/null 2>&1; then
+    if ! docker compose version >/dev/null 2>&1 && \
+       ! command -v docker-compose >/dev/null 2>&1; then
         missing+=("docker-compose")
     fi
 
@@ -530,33 +585,232 @@ check_dependencies() {
         return 0
     fi
 
-    print_error "Missing required dependencies: ${missing[*]}"
-    
-    local os_id="unknown"
-    if [[ -f /etc/os-release ]]; then
-        os_id=$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')
-    fi
-
+    print_error "Missing dependencies: ${missing[*]}"
     echo >&2
+
+    local os_id="unknown"
+    [[ -f /etc/os-release ]] && \
+        os_id="$(grep -E '^ID=' /etc/os-release | cut -d= -f2 | tr -d '"')"
+
     case "$os_id" in
         ubuntu|debian|raspberrypi|pop|mint)
-            print_info "To install on $os_id:"
-            echo "  sudo apt update && sudo apt install -y ${missing[*]}" >&2
-            ;;
+            print_info "Install on $os_id:"
+            echo "  sudo apt update && sudo apt install -y ${missing[*]}" >&2 ;;
         fedora)
-            print_info "To install on Fedora:"
-            echo "  sudo dnf install -y ${missing[*]}" >&2
-            ;;
+            print_info "Install on Fedora:"
+            echo "  sudo dnf install -y ${missing[*]}" >&2 ;;
         arch|manjaro)
-            print_info "To install on Arch:"
-            echo "  sudo pacman -S ${missing[*]}" >&2
-            ;;
+            print_info "Install on Arch:"
+            echo "  sudo pacman -S ${missing[*]}" >&2 ;;
         *)
-            print_info "Please install the following packages using your package manager: ${missing[*]}"
-            ;;
+            print_info "Install with your package manager: ${missing[*]}" ;;
     esac
     echo >&2
     exit 1
+}
+
+# ─── Action handlers ──────────────────────────────────────────────────────────
+
+action_new() {
+    reset_instance_vars
+
+    choose_nord_location || return 0   # ESC → back to main menu
+    [[ -z "$SELECTED_COUNTRY" ]] && return 0
+
+    SERVER_COUNTRIES="$SELECTED_COUNTRY"
+    SERVER_CITIES="$SELECTED_CITY"
+
+    # Derive instance name from country
+    INSTANCE="$(echo "$SERVER_COUNTRIES" \
+        | tr '[:upper:]' '[:lower:]' \
+        | tr -cd 'a-z0-9_ -' \
+        | tr ' ' '_')"
+    [[ -z "$INSTANCE" ]] && INSTANCE="vpn0"
+
+    local inst_dir="${ROOT_DIR}/country/${INSTANCE}"
+    ENV_FILE="${inst_dir}/.env"
+
+    if [[ -d "$inst_dir" ]]; then
+        print_warn "Profile '${INSTANCE}' already exists. Use 'Edit existing profile' instead."
+        return 0
+    fi
+
+    bash "$MANAGE" create "$INSTANCE"
+
+    # Load the generated .env but preserve our location selections
+    load_env
+    SERVER_COUNTRIES="$SELECTED_COUNTRY"
+    SERVER_CITIES="$SELECTED_CITY"
+
+    if configure_env_full; then
+        bash "$MANAGE" check-conflicts
+        echo >&2
+        local go
+        read -r -p "  Start profile '${INSTANCE}' now? [Y/n]: " go
+        if [[ ! "${go:-Y}" =~ ^[Nn]$ ]]; then
+            bash "$MANAGE" start "$INSTANCE"
+        else
+            print_info "Run later: ./manage.sh start ${INSTANCE}"
+        fi
+    fi
+}
+
+action_existing() {
+    local existing=()
+    mapfile -t existing < <(
+        find "${ROOT_DIR}/country" -maxdepth 1 -mindepth 1 -type d \
+            -exec basename {} \; 2>/dev/null | sort || true
+    )
+    if [[ ${#existing[@]} -eq 0 ]]; then
+        print_warn "No existing profiles found."
+        return 0
+    fi
+
+    local stack_choice
+    stack_choice="$(select_menu "Select profile" existing existing 0 \
+        "↑↓ navigate  ·  Enter select  ·  Esc → Main Menu")" || return 0
+
+    reset_instance_vars
+    INSTANCE="$stack_choice"
+    ENV_FILE="${ROOT_DIR}/country/${INSTANCE}/.env"
+    load_env
+
+    local edit_opts=("reuse" "selective" "full")
+    local edit_lbls=(
+        "Use existing config as-is"
+        "Edit selected values"
+        "Full reconfiguration"
+    )
+    local mode
+    mode="$(select_menu "Config: ${INSTANCE}" edit_opts edit_lbls 0 \
+        "↑↓ navigate  ·  Enter select  ·  Esc → profile list")" || return 0
+
+    case "$mode" in
+        reuse)
+            if is_instance_running "$INSTANCE"; then
+                local go
+                read -r -p "  Profile '${INSTANCE}' is already running. Restart it? [y/N]: " go
+                if [[ "${go:-N}" =~ ^[Yy]$ ]]; then
+                    bash "$MANAGE" restart "$INSTANCE"
+                else
+                    print_info "Leaving '${INSTANCE}' running."
+                fi
+            else
+                print_info "Starting '${INSTANCE}'..."
+                bash "$MANAGE" start "$INSTANCE"
+            fi
+            ;;
+        selective)
+            if configure_env_selective; then
+                bash "$MANAGE" check-conflicts
+                print_info "Configuration updated. Return to main menu."
+            fi
+            ;;
+        full)
+            if configure_env_full; then
+                bash "$MANAGE" check-conflicts
+                print_info "Configuration updated. Return to main menu."
+            fi
+            ;;
+    esac
+}
+
+action_manage() {
+    local manage_opts=("start" "stop" "down")
+    local manage_lbls=(
+        "▶  Start a profile"
+        "⏸  Stop  (keeps containers)"
+        "⏹  Down  (removes containers + image)"
+    )
+    local manage_action
+    manage_action="$(select_menu "Manage Activity" manage_opts manage_lbls 0 \
+        "↑↓ navigate  ·  Enter select  ·  Esc → Main Menu")" || return 0
+
+    local all_profiles=()
+    mapfile -t all_profiles < <(
+        find "${ROOT_DIR}/country" -maxdepth 1 -mindepth 1 -type d \
+            -exec basename {} \; 2>/dev/null | sort || true
+    )
+
+    # Filter by running state
+    local filtered=()
+    local p
+    for p in "${all_profiles[@]}"; do
+        local is_running=0
+        is_instance_running "$p" && is_running=1
+
+        case "$manage_action" in
+            start) (( is_running == 0 )) && filtered+=("$p") ;;
+            stop|down) (( is_running == 1 )) && filtered+=("$p") ;;
+        esac
+    done
+
+    if [[ ${#filtered[@]} -eq 0 ]]; then
+        case "$manage_action" in
+            start) print_warn "All profiles already running." ;;
+            *)     print_warn "No active profiles running." ;;
+        esac
+        return 0
+    fi
+
+    local stack_choice
+    stack_choice="$(select_menu "Select profile to ${manage_action}" filtered filtered 0 \
+        "↑↓ navigate  ·  Enter select  ·  Esc → action menu")" || return 0
+
+    case "$manage_action" in
+        start) print_info "Starting ${stack_choice}..."
+               bash "$MANAGE" start "$stack_choice" ;;
+        stop)  print_info "Stopping ${stack_choice}..."
+               bash "$MANAGE" stop "$stack_choice" ;;
+        down)  print_info "Tearing down ${stack_choice}..."
+               bash "$MANAGE" down "$stack_choice" ;;
+    esac
+}
+
+action_delete() {
+    local profiles=()
+    mapfile -t profiles < <(
+        find "${ROOT_DIR}/country" -maxdepth 1 -mindepth 1 -type d \
+            -exec basename {} \; 2>/dev/null | sort || true
+    )
+    if [[ ${#profiles[@]} -eq 0 ]]; then
+        print_warn "No profiles to delete."
+        return 0
+    fi
+
+    local del_choice
+    del_choice="$(select_menu "Select profile to delete" profiles profiles 0 \
+        "↑↓ navigate  ·  Enter select  ·  Esc → Main Menu")" || return 0
+
+    echo >&2
+    print_warn "Permanently delete profile '${del_choice}' and all its config."
+    local confirm
+    read -r -p "  Type 'delete' to confirm: " confirm
+    if [[ "$confirm" != "delete" ]]; then
+        print_info "Aborted."
+        return 0
+    fi
+
+    if is_instance_running "${del_choice}"; then
+        print_info "Stopping running containers first..."
+        bash "$MANAGE" down "$del_choice" 2>/dev/null || true
+    fi
+
+    rm -rf "${ROOT_DIR}/country/${del_choice}"
+    print_success "Profile '${del_choice}' deleted."
+}
+
+action_credentials() {
+    local cred_opts=("wireguard" "openvpn")
+    local cred_lbls=("WireGuard / NordLynx" "OpenVPN")
+    local c
+    c="$(select_menu "Select credentials to update" cred_opts cred_lbls 0 \
+        "↑↓ navigate  ·  Enter select  ·  Esc → Main Menu")" || return 0
+
+    local old_vpn="${VPN_TYPE:-wireguard}"
+    VPN_TYPE="$c"
+    _step_vpn_credentials "true" || true
+    VPN_TYPE="$old_vpn"
 }
 
 # ─── Main ─────────────────────────────────────────────────────────────────────
@@ -565,255 +819,33 @@ main() {
     setup_colors
     check_dependencies
     print_banner
-
     load_credentials
 
+    local top_opts=("new" "existing" "manage" "delete" "credentials")
+    local top_lbls=(
+        "🌍 Create new VPN profile"
+        "✎  Edit existing profile"
+        "⏹  Manage Activity"
+        "🗑  Delete profile"
+        "🔑 Update VPN credentials"
+    )
+
     while true; do
-        local top_opts=("new" "existing" "manage" "delete" "credentials")
-        local top_lbls=(
-            "🌍 Create new VPN profile"
-            "✎  Edit existing profile"
-            "⏹  Manage Activity"
-            "🗑  Delete profile"
-            "🔑 Update VPN credentials"
-        )
         local top_choice
-        while true; do
-            top_choice="$(select_menu "Main Menu" top_opts top_lbls 0 \
-                "↑↓ navigate  ·  Enter select  ·  Esc quit")" || { print_info "Exiting."; exit 0; }
-            [[ -n "$top_choice" ]] && break
-        done
+        top_choice="$(select_menu "Main Menu" top_opts top_lbls 0 \
+            "↑↓ navigate  ·  Enter select  ·  Esc quit")" || {
+            print_info "Exiting."
+            exit 0
+        }
 
-        if [[ "$top_choice" == "credentials" ]]; then
-            local cred_opts=("wireguard" "openvpn")
-            local cred_lbls=("WireGuard / NordLynx" "OpenVPN")
-            local c
-            while true; do
-                c="$(select_menu "Select credentials to update" cred_opts cred_lbls 0 \
-                    "↑↓ navigate  ·  Enter select  ·  Esc → Main Menu")" || break
-                break
-            done
-            [[ -z "$c" ]] && continue
-            
-            local old_vpn="${VPN_TYPE:-wireguard}"
-            VPN_TYPE="$c"
-            _step_vpn_credentials "true"
-            VPN_TYPE="$old_vpn"
-            continue
-        fi
-
-        if [[ "$top_choice" == "delete" ]]; then
-            local del_profiles=()
-            mapfile -t del_profiles < <(find "${ROOT_DIR}/country" -maxdepth 1 -mindepth 1 -type d -exec basename {} \; 2>/dev/null | sort || true)
-            if [[ ${#del_profiles[@]} -eq 0 ]]; then
-                print_warn "No profiles to delete."
-                continue
-            fi
-
-            local del_choice
-            while true; do
-                del_choice="$(select_menu "Select profile to delete" del_profiles del_profiles 0 \
-                    "↑↓ navigate  ·  Enter select  ·  Esc → Main Menu")" || break
-                break
-            done
-            [[ -z "${del_choice:-}" ]] && continue
-
-            echo >&2
-            print_warn "This will permanently delete profile '${del_choice}' and all its config."
-            local confirm
-            read -r -p "  Type 'delete' to confirm: " confirm
-            if [[ "$confirm" != "delete" ]]; then
-                print_info "Aborted."
-                continue
-            fi
-
-            # Stop containers if running
-            if [[ "$(docker inspect -f '{{.State.Status}}' "wifi-ap-${del_choice}" 2>/dev/null || true)" == "running" ]] || \
-               [[ "$(docker inspect -f '{{.State.Status}}' "gluetun-${del_choice}" 2>/dev/null || true)" == "running" ]]; then
-                print_info "Stopping running containers first..."
-                bash "$MANAGE" down "$del_choice" 2>/dev/null || true
-            fi
-
-            rm -rf "${ROOT_DIR}/country/${del_choice}"
-            print_success "Profile '${del_choice}' deleted."
-            continue
-        fi
-
-        if [[ "$top_choice" == "manage" ]]; then
-            # Step 1: pick the action
-            local manage_opts=("start" "stop" "down")
-            local manage_lbls=(
-                "▶  Start a profile"
-                "⏸  Stop  (keeps containers, can restart quickly)"
-                "⏹  Down  (removes containers + wifi-ap image)"
-            )
-            local manage_action
-            while true; do
-                manage_action="$(select_menu "Manage Activity" manage_opts manage_lbls 0 \
-                    "↑↓ navigate  ·  Enter select  ·  Esc → Main Menu")" || break
-                break
-            done
-            [[ -z "${manage_action:-}" ]] && continue
-
-            # Step 2: build a filtered list of profiles relevant to the chosen action
-            local all_profiles=() filtered=()
-            mapfile -t all_profiles < <(find "${ROOT_DIR}/country" -maxdepth 1 -mindepth 1 -type d -exec basename {} \; 2>/dev/null | sort || true)
-
-            for p in "${all_profiles[@]}"; do
-                local is_running=0
-                if [[ "$(docker inspect -f '{{.State.Status}}' "wifi-ap-$p" 2>/dev/null || true)" == "running" ]] || \
-                   [[ "$(docker inspect -f '{{.State.Status}}' "gluetun-$p" 2>/dev/null || true)" == "running" ]]; then
-                    is_running=1
-                fi
-                case "$manage_action" in
-                    start) (( is_running == 0 )) && filtered+=("$p") ;;
-                    stop|down) (( is_running == 1 )) && filtered+=("$p") ;;
-                esac
-            done
-
-            if [[ ${#filtered[@]} -eq 0 ]]; then
-                case "$manage_action" in
-                    start) print_warn "All profiles are already running." ;;
-                    *)     print_warn "No active profiles running." ;;
-                esac
-                continue
-            fi
-
-            # Step 3: pick the profile
-            local stack_choice
-            while true; do
-                stack_choice="$(select_menu "Select profile to ${manage_action}" filtered filtered 0 \
-                    "↑↓ navigate  ·  Enter select  ·  Esc → Action menu")" || break
-                break
-            done
-            [[ -z "${stack_choice:-}" ]] && continue
-
-            case "$manage_action" in
-                start)
-                    print_info "Starting ${stack_choice}..."
-                    bash "$MANAGE" start "$stack_choice"
-                    ;;
-                stop)
-                    print_info "Stopping ${stack_choice}..."
-                    bash "$MANAGE" stop "$stack_choice"
-                    ;;
-                down)
-                    print_info "Tearing down ${stack_choice}..."
-                    bash "$MANAGE" down "$stack_choice"
-                    ;;
-            esac
-            continue
-        fi
-
-        if [[ "$top_choice" == "new" ]]; then
-            _city_tmp_init
-            SERVER_COUNTRIES="$(choose_nord_location)" || continue
-            _city_tmp_read
-            SERVER_CITIES="${SELECTED_CITY:-}"
-            [[ -z "$SERVER_COUNTRIES" ]] && continue
-
-            INSTANCE="$(echo "$SERVER_COUNTRIES" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_ -' | tr ' ' '_')"
-            [[ -z "$INSTANCE" ]] && INSTANCE="vpn0"
-
-            local inst_dir="${ROOT_DIR}/country/${INSTANCE}"
-            ENV_FILE="${inst_dir}/.env"
-
-            if [[ -d "$inst_dir" ]]; then
-                print_warn "Profile '${INSTANCE}' already exists. Use 'Edit existing profile' instead."
-                continue
-            fi
-
-            bash "$MANAGE" create "$INSTANCE"
-            
-            local _tmp_country="$SERVER_COUNTRIES"
-            local _tmp_city="$SERVER_CITIES"
-            load_env
-            SERVER_COUNTRIES="${_tmp_country:-${SERVER_COUNTRIES:-}}"
-            SERVER_CITIES="${_tmp_city:-${SERVER_CITIES:-}}"
-            
-            # Final fallback: if still empty or Netherlands, use Instance name
-            if [[ -z "${SERVER_COUNTRIES:-}" || "$SERVER_COUNTRIES" == "Netherlands" ]]; then
-                SERVER_COUNTRIES="${INSTANCE^}"
-            fi
-
-            if configure_env_full; then
-                bash "$MANAGE" check-conflicts
-                echo >&2
-                read -r -p "  Start country profile '${INSTANCE}' now? [Y/n]: " go
-                go="${go:-Y}"
-                if [[ ! "$go" =~ ^[Nn]$ ]]; then
-                    bash "$MANAGE" start "$INSTANCE"
-                else
-                    print_info "Run later: ./manage.sh start ${INSTANCE}"
-                fi
-            fi
-            continue
-        fi
-
-        if [[ "$top_choice" == "existing" ]]; then
-            local existing=()
-            mapfile -t existing < <(find "${ROOT_DIR}/country" -maxdepth 1 -mindepth 1 -type d -exec basename {} \; 2>/dev/null | sort || true)
-            if [[ ${#existing[@]} -eq 0 ]]; then
-                print_warn "No existing profiles found."
-                continue
-            fi
-
-            local stack_choice
-            while true; do
-                stack_choice="$(select_menu "Select profile" existing existing 0 \
-                    "↑↓ navigate  ·  Enter select  ·  Esc → Main Menu")" || break
-                break
-            done
-            [[ -z "${stack_choice:-}" ]] && continue
-
-            INSTANCE="$stack_choice"
-            local inst_dir="${ROOT_DIR}/country/${INSTANCE}"
-            ENV_FILE="${inst_dir}/.env"
-            load_env
-            if [[ -z "${SERVER_COUNTRIES:-}" || "$SERVER_COUNTRIES" == "Netherlands" ]]; then
-                SERVER_COUNTRIES="${INSTANCE^}"
-            fi
-
-            local edit_opts=("reuse" "selective" "full")
-            local edit_lbls=(
-                "Use existing config as-is"
-                "Edit selected values"
-                "Full reconfiguration"
-            )
-            local mode
-            while true; do
-                mode="$(select_menu "Config: ${INSTANCE}" edit_opts edit_lbls 0 \
-                    "↑↓ navigate  ·  Enter select  ·  Esc → stack list")" || break
-                break
-            done
-            [[ -z "${mode:-}" ]] && continue
-
-            case "$mode" in
-                reuse)     
-                    print_info "Using existing config."
-                    bash "$MANAGE" start "$INSTANCE"
-                    ;;
-                selective) 
-                    if configure_env_selective; then
-                        bash "$MANAGE" check-conflicts
-                        read -r -p "  Restart profile '${INSTANCE}' now? [Y/n]: " go
-                        if [[ ! "${go:-Y}" =~ ^[Nn]$ ]]; then
-                            bash "$MANAGE" restart "$INSTANCE"
-                        fi
-                    fi
-                    ;;
-                full)      
-                    if configure_env_full; then
-                        bash "$MANAGE" check-conflicts
-                        read -r -p "  Restart profile '${INSTANCE}' now? [Y/n]: " go
-                        if [[ ! "${go:-Y}" =~ ^[Nn]$ ]]; then
-                            bash "$MANAGE" restart "$INSTANCE"
-                        fi
-                    fi
-                    ;;
-            esac
-        fi
-
+        case "$top_choice" in
+            new)         action_new         ;;
+            existing)    action_existing    ;;
+            manage)      action_manage      ;;
+            delete)      action_delete      ;;
+            credentials) action_credentials ;;
+            *)           print_warn "Unknown option: ${top_choice}" ;;
+        esac
     done
 }
 
