@@ -1,30 +1,30 @@
 # NordVPN Containerized WiFi Access Point
 
-> Turn any Linux machine into a privacy-first VPN router — no expensive hardware required.
+> Turn any Linux machine into a privacy-first VPN router - no expensive hardware required.
 
 This project broadcasts a WiFi hotspot that routes **100% of connected client traffic** through an encrypted NordVPN tunnel. Smart TVs, projectors, gaming consoles, or any device that can't run a VPN app natively gets full VPN coverage simply by connecting to the hotspot.
 
 ---
 
-## 🎯 Why This Project Exists
+## Why This Project Exists
 
 The frustration of trying to watch region-locked content like Netflix India on a Smart TV or projector sparked this project. These devices don't support VPN clients natively, and dedicated VPN routers are either expensive or underpowered for the task.
 
-The insight is straightforward: a VPN router is essentially just a device with a VPN client in its firmware and enough compute to handle routing. This project takes that idea and runs with it, using Docker and NordVPN to turn any standard Linux machine into a fully functional VPN Access Point. Once a device is connected to the hotspot, it is automatically routed through an encrypted tunnel—bypassing geo-restrictions and keeping all traffic private without requiring a VPN app on the end device.
+The insight is straightforward: a VPN router is essentially just a device with a VPN client in its firmware and enough compute to handle routing. This project takes that idea and runs with it, using Docker and NordVPN to turn any standard Linux machine into a fully functional VPN Access Point. Once a device is connected to the hotspot, it is automatically routed through an encrypted tunnel-bypassing geo-restrictions and keeping all traffic private without requiring a VPN app on the end device.
 
-## ✨ Features
+## Features
 
-- **Dual Protocol Support** — Choose **OpenVPN** for compatibility or **WireGuard (NordLynx)** for speed.
-- **Containerized Stack** — [Gluetun](https://github.com/qdm12/gluetun) manages the VPN tunnel; a custom Debian `wifi-ap` container runs `hostapd` + `dnsmasq` for the hotspot.
-- **Zero DNS Leaks** — NordVPN's DNS servers are pushed directly to clients, preventing geo-detection via DNS.
-- **Strict Kill-Switch** — Traffic is bound to the VPN container's network namespace. VPN drops = hotspot internet drops. No exceptions.
-- **Hot-Reloadable Config** — Change your SSID or passphrase without rebuilding containers.
+- **Dual Protocol Support** - Choose **OpenVPN** for compatibility or **WireGuard (NordLynx)** for speed.
+- **Containerized Stack** - [Gluetun](https://github.com/qdm12/gluetun) manages the VPN tunnel; a custom Debian `wifi-ap` container runs `hostapd` + `dnsmasq` for the hotspot.
+- **Zero DNS Leaks** - NordVPN's DNS servers are pushed directly to clients, preventing geo-detection via DNS.
+- **Strict Kill-Switch** - Traffic is bound to the VPN container's network namespace. VPN drops = hotspot internet drops. No exceptions.
+- **Hot-Reloadable Config** - Change your SSID or passphrase without rebuilding containers.
 
 ---
 
-## 🏗 Architecture
+## Architecture
 
-Each instance pairs two services: **Gluetun** (VPN + kill-switch) and **WiFi-AP** (hotspot). Policy routing tables on the host ensure all hotspot traffic is namespaced through the VPN — not the host's default route.
+Each instance pairs two services: **Gluetun** (VPN + kill-switch) and **WiFi-AP** (hotspot). Policy routing tables on the host ensure all hotspot traffic is namespaced through the VPN - not the host's default route.
 
 ```mermaid
 graph TD
@@ -35,10 +35,10 @@ graph TD
     subgraph "Docker Host (Linux)"
         subgraph "Instance Stack (e.g., 'united_states')"
             AP["WiFi-AP Service<br/>(hostapd / dnsmasq)"]
-            GT["Gluetun Service<br/>(NordVPN / Kill-switch)"]
+            GT["Gluetun Service<br/>(NordVPN / Kill-Switch)"]
         end
 
-        WIFI["Physical WiFi Interface<br/>(e.g., wlan0)"]
+        WIFI["Physical WiFi Interface<br/>(e.g., wlo1)"]
         RT["Policy Routing Table<br/>(e.g., Table 100)"]
         TUN["Virtual Tunnel<br/>(tun0)"]
     end
@@ -56,7 +56,7 @@ graph TD
 
 ---
 
-## ⚙️ Setup
+## Setup
 
 ### Prerequisites
 
@@ -68,8 +68,8 @@ graph TD
 | **WiFi Adapter** | Must support AP (Access Point) mode |
 
 **Two-path network options:**
-- ✅ **Ethernet + WiFi** *(Recommended)* — Ethernet for internet, WiFi adapter for the AP.
-- **Dual WiFi** — Internal WiFi for internet, external USB adapter for the AP.
+- **Ethernet + WiFi** (Recommended) - Ethernet for internet, WiFi adapter for the AP.
+- **Dual WiFi** - Internal WiFi for internet, external USB adapter for the AP.
 
 ---
 
@@ -104,7 +104,7 @@ FIREWALL_OUTBOUND_SUBNETS=192.168.50.145/32
 
 ---
 
-### 2. Customize Hotspot Settings *(Optional)*
+### 2. Customize Hotspot Settings (Optional)
 
 Edit `access_point/hostapd.conf` inside your chosen protocol folder (`openvpn_config/` or `wireguard_config/`):
 
@@ -139,7 +139,7 @@ Also update `FIREWALL_OUTBOUND_SUBNETS` in `.env` to match your host's LAN subne
 
 ---
 
-## 🚀 Usage
+## Usage
 
 Navigate to the config folder for your preferred protocol and bring up the stack:
 
@@ -165,7 +165,7 @@ sudo docker logs wifi-ap -f
 
 ---
 
-## 🛠 Troubleshooting
+## Troubleshooting
 
 **Clients connect but show "No Internet"**
 1. Verify Gluetun connected successfully: `docker logs gluetun`
@@ -184,7 +184,7 @@ Streaming platforms actively blocklist known VPN exit IPs.
 
 ---
 
-## 🙏 Credits
+## Credits
 
 Inspired by [dannypv05261](https://github.com/dannypv05261/docker-vpn-ap) for demonstrating the foundational logic of sharing a tunneled network over a WiFi Access Point.
 
