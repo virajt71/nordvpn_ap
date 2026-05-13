@@ -10,11 +10,11 @@ AP_CHANNEL="${AP_CHANNEL:-6}"
 AP_HW_MODE="${AP_HW_MODE:-g}"
 AP_CHANNEL_WIDTH="${AP_CHANNEL_WIDTH:-20}"
 AP_SECURITY="${AP_SECURITY:-wpa2}"
-INSTANCE="${INSTANCE:-vpn0}"
+COUNTRY="${COUNTRY:-vpn0}"
 # ROUTING_TABLE must not collide across instances; pass explicitly from .env
 ROUTING_TABLE="${ROUTING_TABLE:-100}"
 
-TAG="[wifi-ap/${INSTANCE}]"
+TAG="[wifi-ap/${COUNTRY}]"
 
 find_vpn_pid() {
     for pid in /proc/[0-9]*/net/dev; do
@@ -24,7 +24,7 @@ find_vpn_pid() {
 }
 
 write_hostapd_conf() {
-    cat > /tmp/hostapd-${INSTANCE}.conf <<EOF
+    cat > /tmp/hostapd-${COUNTRY}.conf <<EOF
 interface=${AP_IFACE}
 driver=nl80211
 ssid=${AP_SSID}
@@ -37,7 +37,7 @@ EOF
 
     case "${AP_SECURITY,,}" in
         wpa3)
-            cat >> /tmp/hostapd-${INSTANCE}.conf <<EOF
+            cat >> /tmp/hostapd-${COUNTRY}.conf <<EOF
 wpa=2
 wpa_key_mgmt=SAE
 rsn_pairwise=CCMP
@@ -46,7 +46,7 @@ sae_password=${AP_PASSWORD}
 EOF
             ;;
         wpa2-wpa3|mixed)
-            cat >> /tmp/hostapd-${INSTANCE}.conf <<EOF
+            cat >> /tmp/hostapd-${COUNTRY}.conf <<EOF
 wpa=2
 wpa_key_mgmt=WPA-PSK SAE
 rsn_pairwise=CCMP
@@ -56,7 +56,7 @@ sae_password=${AP_PASSWORD}
 EOF
             ;;
         *)
-            cat >> /tmp/hostapd-${INSTANCE}.conf <<EOF
+            cat >> /tmp/hostapd-${COUNTRY}.conf <<EOF
 wpa=2
 wpa_key_mgmt=WPA-PSK
 rsn_pairwise=CCMP
@@ -65,7 +65,7 @@ EOF
             ;;
     esac
 
-    cat >> /tmp/hostapd-${INSTANCE}.conf <<EOF
+    cat >> /tmp/hostapd-${COUNTRY}.conf <<EOF
 logger_syslog=-1
 logger_syslog_level=2
 logger_stdout=-1
@@ -76,14 +76,14 @@ EOF
         {
             echo "ieee80211ac=1"
             [[ "$AP_HW_MODE" == "ax" ]] && echo "ieee80211ax=1"
-        } >> /tmp/hostapd-${INSTANCE}.conf
+        } >> /tmp/hostapd-${COUNTRY}.conf
     fi
 }
 
 write_dnsmasq_conf() {
     local dhcp_base
     dhcp_base="$(echo "$AP_IP" | awk -F. '{print $1"."$2"."$3}')"
-    cat > /tmp/dnsmasq-${INSTANCE}.conf <<EOF
+    cat > /tmp/dnsmasq-${COUNTRY}.conf <<EOF
 interface=${AP_IFACE}
 bind-interfaces
 no-daemon
@@ -93,7 +93,7 @@ dhcp-option=6,103.86.96.100,103.86.99.100
 no-resolv
 server=103.86.96.100
 server=103.86.99.100
-dhcp-leasefile=/tmp/dnsmasq-${INSTANCE}.leases
+dhcp-leasefile=/tmp/dnsmasq-${COUNTRY}.leases
 EOF
 }
 
@@ -140,8 +140,8 @@ EOF
 
 cleanup() {
     echo "==> ${TAG} Shutting down..."
-    pkill -f "hostapd /tmp/hostapd-${INSTANCE}.conf" 2>/dev/null || true
-    pkill -f "dnsmasq --conf-file=/tmp/dnsmasq-${INSTANCE}.conf" 2>/dev/null || true
+    pkill -f "hostapd /tmp/hostapd-${COUNTRY}.conf" 2>/dev/null || true
+    pkill -f "dnsmasq --conf-file=/tmp/dnsmasq-${COUNTRY}.conf" 2>/dev/null || true
     ip rule del from "$AP_SUBNET" lookup $ROUTING_TABLE 2>/dev/null || true
     ip route flush table $ROUTING_TABLE 2>/dev/null || true
     ip addr flush dev "$AP_IFACE" 2>/dev/null || true
@@ -181,7 +181,7 @@ ip link set "$AP_IFACE" up
 (
     while true; do
         if ! ip addr show "$AP_IFACE" | grep -q "$AP_IP"; then
-            echo "  [keep-alive/${INSTANCE}] Restoring IP $AP_IP to $AP_IFACE"
+            echo "  [keep-alive/${COUNTRY}] Restoring IP $AP_IP to $AP_IFACE"
             ip addr add "$AP_IP/24" dev "$AP_IFACE" 2>/dev/null || true
         fi
         sleep 5
@@ -189,12 +189,12 @@ ip link set "$AP_IFACE" up
 ) &
 
 echo "==> ${TAG} Starting hostapd..."
-hostapd /tmp/hostapd-${INSTANCE}.conf &
+hostapd /tmp/hostapd-${COUNTRY}.conf &
 HOSTAPD_PID=$!
 sleep 2
 
 echo "==> ${TAG} Starting dnsmasq..."
-dnsmasq --conf-file=/tmp/dnsmasq-${INSTANCE}.conf --no-daemon &
+dnsmasq --conf-file=/tmp/dnsmasq-${COUNTRY}.conf --no-daemon &
 sleep 1
 
 echo "==> ${TAG} Setting up VPN routing (table ${ROUTING_TABLE})..."
@@ -202,7 +202,7 @@ setup_routing "$GLUETUN_PID"
 
 echo ""
 echo "╔═══════════════════════════════════════════╗"
-echo "║  NordVPN WiFi AP LIVE  [${INSTANCE}]"
+echo "║  NordVPN WiFi AP LIVE  [${COUNTRY}]"
 echo "║  SSID    : ${AP_SSID}"
 echo "║  Password: ${AP_PASSWORD}"
 echo "║  Gateway : ${AP_IP}"
@@ -214,7 +214,7 @@ while true; do
 
     if ! kill -0 "$HOSTAPD_PID" 2>/dev/null; then
         echo "WARN ${TAG}: hostapd died, restarting..."
-        hostapd /tmp/hostapd-${INSTANCE}.conf &
+        hostapd /tmp/hostapd-${COUNTRY}.conf &
         HOSTAPD_PID=$!
         sleep 2
     fi

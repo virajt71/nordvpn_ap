@@ -3,11 +3,12 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-MANAGE="${ROOT_DIR}/manage.sh"
 NORD_CACHE="${ROOT_DIR}/.nord_locations.json"
 NORD_CACHE_TTL=86400
 CREDENTIALS_FILE="${ROOT_DIR}/.env.credentials"
-ENV_FILE=""
+COUNTRY=""
+COUNTRIES_DIR="${ROOT_DIR}/country"
+COMPOSE_TEMPLATE="${ROOT_DIR}/docker-compose.template.yaml"
 
 RC_ESC=2
 
@@ -18,15 +19,15 @@ COLOR_YELLOW="" COLOR_RED="" COLOR_WHITE=""
 
 setup_colors() {
     [[ -t 2 ]] && command -v tput >/dev/null 2>&1 || return 0
-    COLOR_RESET="$(tput sgr0)"
-    COLOR_BOLD="$(tput bold)"
-    COLOR_DIM="$(tput dim 2>/dev/null || true)"
-    COLOR_BLUE="$(tput setaf 4)"
-    COLOR_CYAN="$(tput setaf 6)"
-    COLOR_GREEN="$(tput setaf 2)"
-    COLOR_YELLOW="$(tput setaf 3)"
-    COLOR_RED="$(tput setaf 1)"
-    COLOR_WHITE="$(tput setaf 7)"
+    COLOR_RESET="$(tput sgr0 2>/dev/null || echo "")"
+    COLOR_BOLD="$(tput bold 2>/dev/null || echo "")"
+    COLOR_DIM="$(tput dim 2>/dev/null || echo "")"
+    COLOR_BLUE="$(tput setaf 4 2>/dev/null || echo "")"
+    COLOR_CYAN="$(tput setaf 6 2>/dev/null || echo "")"
+    COLOR_GREEN="$(tput setaf 2 2>/dev/null || echo "")"
+    COLOR_YELLOW="$(tput setaf 3 2>/dev/null || echo "")"
+    COLOR_RED="$(tput setaf 1 2>/dev/null || echo "")"
+    COLOR_WHITE="$(tput setaf 7 2>/dev/null || echo "")"
 }
 
 print_info()    { echo "${COLOR_CYAN}  ℹ  $1${COLOR_RESET}" >&2; }
@@ -44,6 +45,312 @@ print_banner() {
     printf "${COLOR_BOLD}${COLOR_BLUE}│%${pad}s${COLOR_WHITE}%s${COLOR_BLUE}%${pad}s│${COLOR_RESET}\n" "" "$title" "" >&2
     echo "${COLOR_BOLD}${COLOR_BLUE}└${line}┘${COLOR_RESET}" >&2
     echo >&2
+}
+
+# ─── Management Helpers (ported from manage.sh) ────────────────────────────────
+
+list_countries() {
+    [[ -d "$COUNTRIES_DIR" ]] || { echo; return; }
+    find "$COUNTRIES_DIR" -maxdepth 1 -mindepth 1 -type d -exec basename {} \; | sort
+}
+
+env_file() { echo "${COUNTRIES_DIR}/$1/.env"; }
+
+load_country_env() {
+    local country="$1"
+    local ef; ef="$(env_file "$country")"
+    [[ -f "$ef" ]] || { print_error "No .env for country '$country' at $ef"; exit 1; }
+    set -a; source "$ef"; set +a
+}
+
+compose_cmd() {
+    local country="$1"; shift
+    local ef; ef="$(env_file "$country")"
+    COUNTRY="$country" docker compose \
+        --project-name "$country" \
+        --project-directory "$ROOT_DIR" \
+        -f "$COMPOSE_TEMPLATE" \
+        --env-file "$ef" \
+        --env-file "${ROOT_DIR}/.env.credentials" \
+        "$@"
+}
+
+container_running() {
+    docker inspect --format '{{.State.Running}}' "$1" 2>/dev/null | grep -q true
+}
+
+_assert_country() {
+    local country="$1"
+    [[ -d "${COUNTRIES_DIR}/${country}" ]] || { print_error "Country '$country' not found."; exit 1; }
+}
+
+# ─── Management Commands (ported from manage.sh) ───────────────────────────────
+
+cmd_list() {
+    print_step "Countries"
+    local countries; mapfile -t countries < <(list_countries)
+    if [[ ${#countries[@]} -eq 0 ]]; then
+        print_warn "No countries found."
+        return
+    fi
+
+    printf "\n  ${COLOR_BOLD}%-12s %-12s %-16s %-16s %-20s${COLOR_RESET}\n" \
+        "COUNTRY" "VPN" "GLUETUN" "WIFI-AP" "SSID"
+    printf "  %s\n" "$(printf '%.0s─' {1..80})"
+
+    for country in "${countries[@]}"; do
+        local ef; ef="$(env_file "$country")"
+        local vpn ssid gluetun_st wifiap_st
+        vpn="$(grep -E '^VPN_TYPE=' "$ef" 2>/dev/null | cut -d= -f2 || echo '?')"
+        ssid="$(grep -E '^AP_SSID=' "$ef" 2>/dev/null | cut -d= -f2 || echo '?')"
+
+        if container_running "gluetun-${country}"; then
+            gluetun_st="${COLOR_GREEN}running${COLOR_RESET}"
+        else
+            gluetun_st="${COLOR_RED}stopped${COLOR_RESET}"
+        fi
+
+        if container_running "wifi-ap-${country}"; then
+            wifiap_st="${COLOR_GREEN}running${COLOR_RESET}"
+        else
+            wifiap_st="${COLOR_RED}stopped${COLOR_RESET}"
+        fi
+
+        printf "  %-12s %-12s %-25b %-25b %-20s\n" \
+            "$country" "$vpn" "$gluetun_st" "$wifiap_st" "$ssid"
+    done
+    echo
+}
+
+cmd_create() {
+    local country="${1:-}"
+    [[ -z "$country" ]] && { print_error "Usage: create <country-name>"; exit 1; }
+    [[ "$country" =~ ^[a-z0-9_-]+$ ]] || { print_error "Country name: lowercase alphanum/dash/underscore only"; exit 1; }
+
+    local dir="${COUNTRIES_DIR}/${country}"
+    local ef="${dir}/.env"
+
+    if [[ -d "$dir" ]]; then
+        print_warn "Country '$country' already exists at $dir"
+        return
+    fi
+
+    mkdir -p "$dir/gluetun-state"
+
+    # Auto-assign routing table — find next free ID starting at 100
+    local used_tables=()
+    mapfile -t used_tables < <(
+        for i_dir in "${COUNTRIES_DIR}"/*/; do
+            local i_env="${i_dir}.env"
+            [[ -f "$i_env" ]] && grep -E '^ROUTING_TABLE=' "$i_env" | cut -d= -f2 || true
+        done
+    )
+    local rt=100
+    while [[ " ${used_tables[*]} " =~ " $rt " ]]; do (( rt++ )); done
+
+    # Auto-assign subnet — 192.168.N.0/24 starting at 60
+    local used_octets=()
+    mapfile -t used_octets < <(
+        for i_dir in "${COUNTRIES_DIR}"/*/; do
+            local i_env="${i_dir}.env"
+            [[ -f "$i_env" ]] && grep -E '^AP_IP=' "$i_env" | grep -oP '192\.168\.\K\d+' || true
+        done
+    )
+    local octet=60
+    while [[ " ${used_octets[*]} " =~ " $octet " ]]; do (( octet++ )); done
+
+    cp "${ROOT_DIR}/.env.example" "$ef"
+    # Capitalize first letter for country default
+    local default_country="${country^}"
+
+    sed -i \
+        -e "s/^COUNTRY=.*/COUNTRY=${country}/" \
+        -e "s/^ROUTING_TABLE=.*/ROUTING_TABLE=${rt}/" \
+        -e "s/^AP_IP=.*/AP_IP=192.168.${octet}.1/" \
+        -e "s/^AP_SUBNET=.*/AP_SUBNET=192.168.${octet}.0\/24/" \
+        -e "s/^AP_SSID=.*/AP_SSID=ap_${country}/" \
+        -e "s/^SERVER_COUNTRIES=.*/SERVER_COUNTRIES=${default_country}/" \
+        "$ef"
+    chmod 600 "$ef"
+
+    print_success "Created country profile '${country}'"
+    print_info "  Dir           : $dir"
+    print_info "  .env          : $ef"
+    print_info "  Routing table : $rt"
+    print_info "  Subnet        : 192.168.${octet}.0/24"
+    echo
+}
+
+cmd_start() {
+    local country="${1:-}"
+    [[ -z "$country" ]] && { print_error "Usage: start <country>"; exit 1; }
+    _assert_country "$country"
+
+    print_info "Starting country profile '$country'..."
+    compose_cmd "$country" up -d --build
+    print_success "Country profile '$country' started."
+}
+
+cmd_stop() {
+    local country="${1:-}"
+    [[ -z "$country" ]] && { print_error "Usage: stop <country>"; exit 1; }
+    _assert_country "$country"
+
+    print_info "Stopping country profile '$country'..."
+    compose_cmd "$country" stop
+    print_success "Country profile '$country' stopped."
+}
+
+cmd_down() {
+    local country="${1:-}"
+    [[ -z "$country" ]] && { print_error "Usage: down <country>"; exit 1; }
+    _assert_country "$country"
+
+    print_info "Tearing down country profile '$country' (removing containers + images)..."
+    compose_cmd "$country" down --rmi local --remove-orphans
+    print_success "Country profile '$country' torn down."
+}
+
+cmd_restart() {
+    local country="${1:-}"
+    [[ -z "$country" ]] && { print_error "Usage: restart <country>"; exit 1; }
+    _assert_country "$country"
+    compose_cmd "$country" restart
+    print_success "Country profile '$country' restarted."
+}
+
+cmd_start_all() {
+    local countries; mapfile -t countries < <(list_countries)
+    [[ ${#countries[@]} -eq 0 ]] && { print_warn "No country profiles."; return; }
+    for country in "${countries[@]}"; do
+        print_info "Starting '$country'..."
+        compose_cmd "$country" up -d --build && print_success "$country up" || print_error "$country failed"
+    done
+}
+
+cmd_stop_all() {
+    local countries; mapfile -t countries < <(list_countries)
+    [[ ${#countries[@]} -eq 0 ]] && { print_warn "No country profiles."; return; }
+    for country in "${countries[@]}"; do
+        print_info "Stopping '$country'..."
+        compose_cmd "$country" down && print_success "$country down" || print_error "$country failed"
+    done
+}
+
+cmd_logs() {
+    local country="${1:-}"
+    [[ -z "$country" ]] && { print_error "Usage: logs <country> [gluetun|wifi-ap]"; exit 1; }
+    _assert_country "$country"
+    local svc="${2:-}"
+    if [[ -n "$svc" ]]; then
+        docker logs "${svc}-${country}" -f
+    else
+        docker logs "gluetun-${country}" -f &
+        docker logs "wifi-ap-${country}" -f &
+        wait
+    fi
+}
+
+cmd_status() {
+    local country="${1:-}"
+    [[ -z "$country" ]] && { print_error "Usage: status <country>"; exit 1; }
+    _assert_country "$country"
+    compose_cmd "$country" ps
+}
+
+cmd_health() {
+    print_step "Health Check — All Countries"
+    local countries; mapfile -t countries < <(list_countries)
+    [[ ${#countries[@]} -eq 0 ]] && { print_warn "No country profiles."; return; }
+
+    for country in "${countries[@]}"; do
+        echo
+        echo "  ${COLOR_BOLD}${country}${COLOR_RESET}"
+
+        if container_running "gluetun-${country}"; then
+            print_success "    gluetun-${country}: running"
+            if docker exec "gluetun-${country}" ip link show tun0 &>/dev/null; then
+                print_success "    tun0: up"
+            else
+                print_error "    tun0: missing — VPN not connected"
+            fi
+            local pub_ip
+            pub_ip="$(docker exec "gluetun-${country}" \
+                wget -qO- --timeout=5 https://api.ipify.org 2>/dev/null || echo 'unreachable')"
+            print_info "    Public IP (via VPN): ${pub_ip}"
+        else
+            print_error "    gluetun-${country}: stopped"
+        fi
+
+        if container_running "wifi-ap-${country}"; then
+            print_success "    wifi-ap-${country}: running"
+            local ef; ef="$(env_file "$country")"
+            local rt ap_sub
+            rt="$(grep -E '^ROUTING_TABLE=' "$ef" | cut -d= -f2 || echo '?')"
+            ap_sub="$(grep -E '^AP_SUBNET=' "$ef" | cut -d= -f2 || echo '?')"
+            if ip rule show | grep -q "lookup ${rt}"; then
+                print_success "    Routing table ${rt}: present"
+            else
+                print_warn "    Routing table ${rt}: missing (wifi-ap may still be starting)"
+            fi
+            print_info "    AP subnet: ${ap_sub}"
+        else
+            print_error "    wifi-ap-${country}: stopped"
+        fi
+    done
+    echo
+}
+
+cmd_check_conflicts() {
+    print_step "Conflict Check — All Countries"
+    local countries; mapfile -t countries < <(list_countries)
+    [[ ${#countries[@]} -eq 0 ]] && { print_warn "No country profiles."; return; }
+
+    declare -A seen_iface seen_rt seen_subnet seen_ssid
+    local conflicts=0
+
+    for country in "${countries[@]}"; do
+        local ef; ef="$(env_file "$country")"
+
+        local iface rt subnet ssid
+        iface="$(grep -E '^AP_IFACE=' "$ef" | cut -d= -f2)"
+        rt="$(grep -E '^ROUTING_TABLE=' "$ef" | cut -d= -f2)"
+        subnet="$(grep -E '^AP_SUBNET=' "$ef" | cut -d= -f2)"
+        ssid="$(grep -E '^AP_SSID=' "$ef" | cut -d= -f2)"
+
+        for key in iface rt subnet ssid; do
+            local val="${!key}"
+            local seen_var="seen_${key}"
+            declare -n _seen="$seen_var"
+            if [[ -n "${_seen[$val]+_}" ]]; then
+                print_error "CONFLICT: ${key}='${val}' shared by '${_seen[$val]}' and '${country}'"
+                (( conflicts++ ))
+            else
+                _seen[$val]="$country"
+            fi
+        done
+    done
+
+    if (( conflicts == 0 )); then
+        print_success "No conflicts detected."
+    else
+        print_error "${conflicts} conflict(s) found. Fix .env files before starting."
+    fi
+    echo
+}
+
+cmd_delete() {
+    local country="${1:-}"
+    [[ -z "$country" ]] && { print_error "Usage: delete <country>"; exit 1; }
+    _assert_country "$country"
+
+    print_warn "This will stop and DELETE country profile '${country}' and all its config."
+    read -r -p "  Type 'delete' to confirm: " confirm
+    [[ "$confirm" != "delete" ]] && { print_info "Aborted."; return; }
+
+    compose_cmd "$country" down --remove-orphans --rmi local 2>/dev/null || true
+    rm -rf "${COUNTRIES_DIR}/${country}"
+    print_success "Country profile '${country}' deleted."
 }
 
 # ─── Spinner ──────────────────────────────────────────────────────────────────
@@ -79,9 +386,12 @@ _TMPFILES=()
 
 _cleanup() {
     spinner_stop 2>/dev/null || true
-    for f in "${_TMPFILES[@]:-}"; do
-        [[ -n "$f" && -f "$f" ]] && rm -f "$f"
-    done
+    if [[ ${#_TMPFILES[@]} -gt 0 ]]; then
+        for f in "${_TMPFILES[@]}"; do
+            [[ -n "$f" && -f "$f" ]] && rm -f "$f"
+        done
+    fi
+    true
 }
 trap _cleanup EXIT
 
@@ -195,6 +505,30 @@ find_index() {
     echo 0
 }
 
+usage() {
+    echo
+    echo "${COLOR_BOLD}Usage:${COLOR_RESET} $0 [command] [args]"
+    echo
+    echo "${COLOR_BOLD}Wizard mode:${COLOR_RESET}"
+    echo "  (no arguments)               Start interactive setup wizard"
+    echo
+    echo "${COLOR_BOLD}Management commands:${COLOR_RESET}"
+    printf "  %-28s %s\n" "list" "List all country profiles + status"
+    printf "  %-28s %s\n" "create <name>" "Create new country profile"
+    printf "  %-28s %s\n" "delete <name>" "Stop + remove country profile"
+    printf "  %-28s %s\n" "start <name>" "Build + start country profile"
+    printf "  %-28s %s\n" "stop <name>" "Stop country profile"
+    printf "  %-28s %s\n" "down <name>" "Tear down country profile"
+    printf "  %-28s %s\n" "restart <name>" "Restart country profile"
+    printf "  %-28s %s\n" "start-all" "Start all country profiles"
+    printf "  %-28s %s\n" "stop-all" "Stop all country profiles"
+    printf "  %-28s %s\n" "status <name>" "Docker compose ps for country profile"
+    printf "  %-28s %s\n" "logs <name> [svc]" "Follow logs"
+    printf "  %-28s %s\n" "health" "VPN connectivity + routing check all profiles"
+    printf "  %-28s %s\n" "check-conflicts" "Detect duplicate iface/subnet/RT across profiles"
+    echo
+}
+
 prompt_default() {
     local prompt="$1" default="$2" value
     printf "  ${COLOR_BOLD}%s${COLOR_RESET} ${COLOR_DIM}[%s]${COLOR_RESET}: " "$prompt" "$default" >&2
@@ -257,14 +591,68 @@ list_wifi_interfaces() {
     done
 }
 
+# ─── WiFi Audit (ported from check_wifi.sh) ───────────────────────────────────
+
+# Returns suggested: channel|hw_mode|width|security
+audit_wifi_interface() {
+    local iface="$1"
+    
+    if ! command -v iw >/dev/null 2>&1; then
+        echo "6|g|20|wpa2"
+        return
+    fi
+
+    # Robust phy determination
+    local phy
+    phy=$(iw dev "$iface" info 2>/dev/null | awk '/wiphy/{print "phy"$2}')
+    if [[ -z "$phy" && -f "/sys/class/net/${iface}/phy80211/index" ]]; then
+        phy="phy$(cat "/sys/class/net/${iface}/phy80211/index")"
+    fi
+
+    if [[ -z "$phy" ]]; then
+        echo "6|g|20|wpa2"
+        return
+    fi
+
+    local iw_list
+    if ! iw_list=$(iw phy "$phy" info 2>/dev/null); then
+        echo "6|g|20|wpa2"
+        return
+    fi
+
+    # AP mode check
+    if ! echo "$iw_list" | grep -A 25 "Supported interface modes:" | grep -q "^\s*\* AP$"; then
+        # If AP mode not supported, we can't do much, but return something sane
+        echo "6|g|20|wpa2"
+        return
+    fi
+
+    # Detection logic
+    local has_5=0 has_ac=0 has_n=0
+    [[ "$iw_list" =~ "Band 2" ]] && has_5=1
+    [[ "$iw_list" =~ "HT20/HT40" ]] && has_n=1
+    [[ "$iw_list" =~ "VHT Capabilities" ]] && has_ac=1
+
+    local r_chan="6" r_hw="g" r_width="20"
+
+    if [[ $has_5 -eq 1 ]]; then
+        r_chan="36"; r_hw="a"
+        [[ $has_ac -eq 1 ]] && r_width="80" || { [[ $has_n -eq 1 ]] && r_width="40"; }
+    elif [[ $has_n -eq 1 ]]; then
+        r_chan="1"; r_hw="g"; r_width="20"
+    fi
+
+    echo "${r_chan}|${r_hw}|${r_width}|wpa2"
+}
+
 choose_wifi_interface() {
     local raw_data=()
     mapfile -t raw_data < <(list_wifi_interfaces)
 
-    # Collect interfaces already claimed by other instances
+    # Collect interfaces already claimed by other country profiles
     local used_ifaces=()
     mapfile -t used_ifaces < <(
-        find "${ROOT_DIR}/country" -name '.env' \
+        find "${COUNTRIES_DIR}" -name '.env' \
             -exec grep -h '^AP_IFACE=' {} \; 2>/dev/null | cut -d= -f2 || true
     )
 
@@ -416,16 +804,25 @@ _step_firewall() {
 
 _step_hotspot() {
     print_step "Hotspot Settings"
-    AP_SSID="$(prompt_default "SSID" "${AP_SSID:-ap_${INSTANCE}}")"
-    [[ "${AP_PASSWORD:-}" == "ChangeMe123!" ]] && AP_PASSWORD=""
-    while true; do
-        AP_PASSWORD="$(prompt_secret "Password (min 8 chars)" "${AP_PASSWORD:-}")"
-        [[ ${#AP_PASSWORD} -ge 8 ]] && break
-        print_warn "Password must be ≥ 8 chars."
-    done
-    AP_CHANNEL="$(prompt_default "WiFi channel"  "${AP_CHANNEL:-6}")"
-    AP_IP="$(prompt_default     "Gateway IP"     "${AP_IP:-192.168.60.1}")"
-    AP_SUBNET="$(prompt_default "Subnet CIDR"    "${AP_SUBNET:-192.168.60.0/24}")"
+    
+    # Auto-assign SSID and Password if not set
+    AP_SSID="${AP_SSID:-ap_${COUNTRY}}"
+    [[ -z "${AP_PASSWORD:-}" ]] && AP_PASSWORD="ChangeMe123!"
+    
+    print_info "SSID: ${AP_SSID}"
+    
+    # Auto-apply WiFi technical settings
+    if [[ -n "${AP_CHANNEL:-}" && -n "${AP_HW_MODE:-}" && -n "${AP_CHANNEL_WIDTH:-}" ]]; then
+        print_info "WiFi: Channel ${AP_CHANNEL}, Mode ${AP_HW_MODE}, Width ${AP_CHANNEL_WIDTH}"
+    else
+        AP_CHANNEL="${AP_CHANNEL:-6}"
+        AP_HW_MODE="${AP_HW_MODE:-g}"
+        AP_CHANNEL_WIDTH="${AP_CHANNEL_WIDTH:-20}"
+        print_info "WiFi: Using default g/20MHz/Ch6"
+    fi
+
+    AP_IP="$(prompt_default            "Gateway IP"         "${AP_IP:-192.168.60.1}")"
+    AP_SUBNET="$(prompt_default        "Subnet CIDR"        "${AP_SUBNET:-192.168.60.0/24}")"
 }
 
 _step_security() {
@@ -445,6 +842,27 @@ _step_network_interface() {
     r="$(choose_wifi_interface)" || return "$RC_ESC"
     AP_IFACE="$r"
     print_success "Interface: ${AP_IFACE}"
+
+    # Audit hardware and set suggestions
+    spinner_start "Auditing WiFi hardware capabilities…"
+    local audit; audit="$(audit_wifi_interface "$AP_IFACE")"
+    spinner_stop
+
+    local s_chan="${audit%%|*}"
+    local rest="${audit#*|}"
+    local s_hw="${rest%%|*}"
+    rest="${rest#*|}"
+    local s_width="${rest%%|*}"
+    rest="${rest#*|}"
+    local s_sec="${rest}"
+
+    # Apply suggestions as defaults
+    AP_CHANNEL="${AP_CHANNEL:-$s_chan}"
+    AP_HW_MODE="${AP_HW_MODE:-$s_hw}"
+    AP_CHANNEL_WIDTH="${AP_CHANNEL_WIDTH:-$s_width}"
+    AP_SECURITY="${AP_SECURITY:-$s_sec}"
+
+    print_info "Suggested for ${AP_IFACE}: Channel ${s_chan}, Mode ${s_hw}, Width ${s_width}"
 }
 
 # ─── Full sequential wizard with proper back-navigation ───────────────────────
@@ -538,12 +956,12 @@ load_credentials() {
     set -a; source "$CREDENTIALS_FILE"; set +a
 }
 
-# ─── Per-instance env ─────────────────────────────────────────────────────────
+# ─── Per-country env ──────────────────────────────────────────────────────────
 save_env() {
     local old_umask; old_umask=$(umask)
     umask 077
     cat > "$ENV_FILE" <<EOF
-INSTANCE=${INSTANCE}
+COUNTRY=${COUNTRY}
 
 ROUTING_TABLE=${ROUTING_TABLE:-100}
 
@@ -579,9 +997,9 @@ load_env() {
     load_credentials
 }
 
-# Reset all instance-scoped vars to avoid cross-iteration bleed
-reset_instance_vars() {
-    INSTANCE="" ENV_FILE=""
+# Reset all country-scoped vars to avoid cross-iteration bleed
+reset_country_vars() {
+    COUNTRY="" ENV_FILE=""
     VPN_TYPE="" OPENVPN_USER="" OPENVPN_PASSWORD="" WIREGUARD_PRIVATE_KEY=""
     SERVER_COUNTRIES="" SERVER_CITIES=""
     FIREWALL_OUTBOUND_SUBNETS=""
@@ -592,7 +1010,7 @@ reset_instance_vars() {
     load_credentials   # re-apply global creds
 }
 
-is_instance_running() {
+is_country_running() {
     local name="$1"
     local ap_st; ap_st="$(docker inspect -f '{{.State.Status}}' "wifi-ap-${name}" 2>/dev/null || true)"
     local gt_st; gt_st="$(docker inspect -f '{{.State.Status}}' "gluetun-${name}" 2>/dev/null || true)"
@@ -642,45 +1060,42 @@ check_dependencies() {
 # ─── Action handlers ──────────────────────────────────────────────────────────
 
 action_new() {
-    reset_instance_vars
+    print_step "Create New Country Profile"
+    reset_country_vars
+    
+    # Initialize variables to avoid 'unbound variable' errors if Esc is pressed
+    local SELECTED_COUNTRY=""
+    local SELECTED_CITY=""
 
-    choose_nord_location || return 0   # ESC → back to main menu
+    choose_nord_location || return 0
     [[ -z "$SELECTED_COUNTRY" ]] && return 0
 
     SERVER_COUNTRIES="$SELECTED_COUNTRY"
     SERVER_CITIES="$SELECTED_CITY"
 
-    # Derive instance name from country
-    INSTANCE="$(echo "$SERVER_COUNTRIES" \
-        | tr '[:upper:]' '[:lower:]' \
-        | tr -cd 'a-z0-9_ -' \
-        | tr ' ' '_')"
-    [[ -z "$INSTANCE" ]] && INSTANCE="vpn0"
+    # Sanitize country name for folder/instance
+    COUNTRY="$(echo "$SERVER_COUNTRIES" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
+    [[ -z "$COUNTRY" ]] && COUNTRY="vpn0"
 
-    local inst_dir="${ROOT_DIR}/country/${INSTANCE}"
-    ENV_FILE="${inst_dir}/.env"
-
-    if [[ -d "$inst_dir" ]]; then
-        print_warn "Profile '${INSTANCE}' already exists. Use 'Edit existing profile' instead."
+    local country_dir="${COUNTRIES_DIR}/${COUNTRY}"
+    if [[ -d "$country_dir" ]]; then
+        print_warn "Profile '${COUNTRY}' already exists. Use 'Edit existing profile' instead."
         return 0
     fi
 
-    bash "$MANAGE" create "$INSTANCE"
-
-    # Load the generated .env but preserve our location selections
-    load_env
-    SERVER_COUNTRIES="$SELECTED_COUNTRY"
-    SERVER_CITIES="$SELECTED_CITY"
+    cmd_create "$COUNTRY"
+    load_country_env "$COUNTRY"
+    ENV_FILE="$(env_file "$COUNTRY")"
 
     if configure_env_full; then
-        bash "$MANAGE" check-conflicts
+        cmd_check_conflicts
         echo >&2
         local go
-        read -r -p "  Start profile '${INSTANCE}' now? [Y/n]: " go
+        read -r -p "  Start profile '${COUNTRY}' now? [Y/n]: " go
         if [[ ! "${go:-Y}" =~ ^[Nn]$ ]]; then
-            bash "$MANAGE" start "$INSTANCE"
+            cmd_start "$COUNTRY"
         else
-            print_info "Run later: ./manage.sh start ${INSTANCE}"
+            print_info "Run later: ./startup.sh start ${COUNTRY}"
         fi
     fi
 }
@@ -688,7 +1103,7 @@ action_new() {
 action_existing() {
     local existing=()
     mapfile -t existing < <(
-        find "${ROOT_DIR}/country" -maxdepth 1 -mindepth 1 -type d \
+        find "${COUNTRIES_DIR}" -maxdepth 1 -mindepth 1 -type d \
             -exec basename {} \; 2>/dev/null | sort || true
     )
     if [[ ${#existing[@]} -eq 0 ]]; then
@@ -700,10 +1115,10 @@ action_existing() {
     stack_choice="$(select_menu "Select profile" existing existing 0 \
         "↑↓ navigate  ·  Enter select  ·  Esc → Main Menu")" || return 0
 
-    reset_instance_vars
-    INSTANCE="$stack_choice"
-    ENV_FILE="${ROOT_DIR}/country/${INSTANCE}/.env"
-    load_env
+    reset_country_vars
+    COUNTRY="$stack_choice"
+    ENV_FILE="${COUNTRIES_DIR}/${COUNTRY}/.env"
+    load_country_env "$COUNTRY"
 
     local edit_opts=("reuse" "selective" "full")
     local edit_lbls=(
@@ -712,33 +1127,33 @@ action_existing() {
         "Full reconfiguration"
     )
     local mode
-    mode="$(select_menu "Config: ${INSTANCE}" edit_opts edit_lbls 0 \
+    mode="$(select_menu "Config: ${COUNTRY}" edit_opts edit_lbls 0 \
         "↑↓ navigate  ·  Enter select  ·  Esc → profile list")" || return 0
 
     case "$mode" in
         reuse)
-            if is_instance_running "$INSTANCE"; then
+            if is_country_running "$COUNTRY"; then
                 local go
-                read -r -p "  Profile '${INSTANCE}' is already running. Restart it? [y/N]: " go
+                read -r -p "  Profile '${COUNTRY}' is already running. Restart it? [y/N]: " go
                 if [[ "${go:-N}" =~ ^[Yy]$ ]]; then
-                    bash "$MANAGE" restart "$INSTANCE"
+                    cmd_restart "$COUNTRY"
                 else
-                    print_info "Leaving '${INSTANCE}' running."
+                    print_info "Leaving '${COUNTRY}' running."
                 fi
             else
-                print_info "Starting '${INSTANCE}'..."
-                bash "$MANAGE" start "$INSTANCE"
+                print_info "Starting '${COUNTRY}'..."
+                cmd_start "$COUNTRY"
             fi
             ;;
         selective)
             if configure_env_selective; then
-                bash "$MANAGE" check-conflicts
+                cmd_check_conflicts
                 print_info "Configuration updated. Return to main menu."
             fi
             ;;
         full)
             if configure_env_full; then
-                bash "$MANAGE" check-conflicts
+                cmd_check_conflicts
                 print_info "Configuration updated. Return to main menu."
             fi
             ;;
@@ -758,7 +1173,7 @@ action_manage() {
 
     local all_profiles=()
     mapfile -t all_profiles < <(
-        find "${ROOT_DIR}/country" -maxdepth 1 -mindepth 1 -type d \
+        find "${COUNTRIES_DIR}" -maxdepth 1 -mindepth 1 -type d \
             -exec basename {} \; 2>/dev/null | sort || true
     )
 
@@ -767,7 +1182,7 @@ action_manage() {
     local p
     for p in "${all_profiles[@]}"; do
         local is_running=0
-        is_instance_running "$p" && is_running=1
+        is_country_running "$p" && is_running=1
 
         case "$manage_action" in
             start) (( is_running == 0 )) && filtered+=("$p") ;;
@@ -789,18 +1204,18 @@ action_manage() {
 
     case "$manage_action" in
         start) print_info "Starting ${stack_choice}..."
-               bash "$MANAGE" start "$stack_choice" ;;
+               cmd_start "$stack_choice" ;;
         stop)  print_info "Stopping ${stack_choice}..."
-               bash "$MANAGE" stop "$stack_choice" ;;
+               cmd_stop "$stack_choice" ;;
         down)  print_info "Tearing down ${stack_choice}..."
-               bash "$MANAGE" down "$stack_choice" ;;
+               cmd_down "$stack_choice" ;;
     esac
 }
 
 action_delete() {
     local profiles=()
     mapfile -t profiles < <(
-        find "${ROOT_DIR}/country" -maxdepth 1 -mindepth 1 -type d \
+        find "${COUNTRIES_DIR}" -maxdepth 1 -mindepth 1 -type d \
             -exec basename {} \; 2>/dev/null | sort || true
     )
     if [[ ${#profiles[@]} -eq 0 ]]; then
@@ -821,12 +1236,12 @@ action_delete() {
         return 0
     fi
 
-    if is_instance_running "${del_choice}"; then
+    if is_country_running "${del_choice}"; then
         print_info "Stopping running containers first..."
-        bash "$MANAGE" down "$del_choice" 2>/dev/null || true
+        cmd_down "$del_choice" 2>/dev/null || true
     fi
 
-    rm -rf "${ROOT_DIR}/country/${del_choice}"
+    rm -rf "${COUNTRIES_DIR}/${del_choice}"
     print_success "Profile '${del_choice}' deleted."
 }
 
@@ -847,17 +1262,43 @@ action_credentials() {
 main() {
     cd "$ROOT_DIR"
     setup_colors
+
+    local cmd="${1:-}"
+    if [[ -n "$cmd" ]]; then
+        shift || true
+        case "$cmd" in
+            list)            cmd_list ;;
+            create)          cmd_create "$@" ;;
+            start)           cmd_start "$@" ;;
+            stop)            cmd_stop "$@" ;;
+            down)            cmd_down "$@" ;;
+            restart)         cmd_restart "$@" ;;
+            start-all)       cmd_start_all ;;
+            stop-all)        cmd_stop_all ;;
+            logs)            cmd_logs "$@" ;;
+            status)          cmd_status "$@" ;;
+            health)          cmd_health ;;
+            check-conflicts) cmd_check_conflicts ;;
+            delete)          cmd_delete "$@" ;;
+            help|--help|-h)  usage; exit 0 ;;
+            *)               print_error "Unknown command: $cmd"; usage; exit 1 ;;
+        esac
+        return 0
+    fi
+
+    # Interactive mode
     check_dependencies
     print_banner
     load_credentials
 
-    local top_opts=("new" "existing" "manage" "delete" "credentials")
+    local top_opts=("new" "existing" "manage" "delete" "credentials" "quit")
     local top_lbls=(
         "🌍 Create new VPN profile"
         "✎  Edit existing profile"
         "⏹  Manage Activity"
         "🗑  Delete profile"
         "🔑 Update VPN credentials"
+        "✖  Quit"
     )
 
     while true; do
@@ -874,6 +1315,7 @@ main() {
             manage)      action_manage      ;;
             delete)      action_delete      ;;
             credentials) action_credentials ;;
+            quit)        print_info "Exiting."; exit 0 ;;
             *)           print_warn "Unknown option: ${top_choice}" ;;
         esac
     done
