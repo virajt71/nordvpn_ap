@@ -1,5 +1,5 @@
 # Ignore secrets
-.env
+# .env
 
 # Ignore gluetun state and server configs
 openvpn_config/config/
