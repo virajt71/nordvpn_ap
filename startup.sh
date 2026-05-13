@@ -11,6 +11,7 @@ COUNTRIES_DIR="${ROOT_DIR}/country"
 COMPOSE_TEMPLATE="${ROOT_DIR}/docker-compose.template.yaml"
 
 RC_ESC=2
+AUDIT_RESULT=""
 
 # ─── Colors ───────────────────────────────────────────────────────────────────
 COLOR_RESET="" COLOR_BOLD="" COLOR_DIM=""
@@ -61,6 +62,7 @@ load_country_env() {
     local ef; ef="$(env_file "$country")"
     [[ -f "$ef" ]] || { print_error "No .env for country '$country' at $ef"; exit 1; }
     set -a; source "$ef"; set +a
+    load_credentials
 }
 
 compose_cmd() {
@@ -207,7 +209,8 @@ cmd_down() {
     _assert_country "$country"
 
     print_info "Tearing down country profile '$country' (removing containers + images)..."
-    compose_cmd "$country" down --rmi local --remove-orphans
+    compose_cmd "$country" down --rmi all --remove-orphans || true
+    docker image rm "wifi-ap-image-${country}" 2>/dev/null || true
     print_success "Country profile '$country' torn down."
 }
 
@@ -348,7 +351,8 @@ cmd_delete() {
     read -r -p "  Type 'delete' to confirm: " confirm
     [[ "$confirm" != "delete" ]] && { print_info "Aborted."; return; }
 
-    compose_cmd "$country" down --remove-orphans --rmi local 2>/dev/null || true
+    compose_cmd "$country" down --remove-orphans --rmi all 2>/dev/null || true
+    docker image rm "wifi-ap-image-${country}" 2>/dev/null || true
     rm -rf "${COUNTRIES_DIR}/${country}"
     print_success "Country profile '${country}' deleted."
 }
@@ -377,8 +381,9 @@ spinner_stop() {
         wait "$SPINNER_PID" 2>/dev/null || true
         SPINNER_PID=""
     fi
-    printf "\r\033[2K" >&2
-    [[ "${1:-}" == "fail" ]] && print_error "Failed."
+    if [[ "${1:-}" == "fail" ]]; then
+        print_error "Failed."
+    fi
 }
 
 # ─── Cleanup trap ─────────────────────────────────────────────────────────────
@@ -414,7 +419,7 @@ read_key() {
             case "$k3" in
                 A) KEY_SEQ="UP"   ;;
                 B) KEY_SEQ="DOWN" ;;
-                *) KEY_SEQ="ESC"  ;;
+                *) KEY_SEQ="UNKNOWN" ;;
             esac
         else
             KEY_SEQ="ESC"
@@ -628,7 +633,8 @@ audit_wifi_interface() {
     fi
 
     # Detection logic
-    local has_5=0 has_ac=0 has_n=0
+    local has_24=0 has_5=0 has_ac=0 has_n=0
+    [[ "$iw_list" =~ "Band 1" ]] && has_24=1
     [[ "$iw_list" =~ "Band 2" ]] && has_5=1
     [[ "$iw_list" =~ "HT20/HT40" ]] && has_n=1
     [[ "$iw_list" =~ "VHT Capabilities" ]] && has_ac=1
@@ -642,7 +648,7 @@ audit_wifi_interface() {
         r_chan="1"; r_hw="g"; r_width="20"
     fi
 
-    echo "${r_chan}|${r_hw}|${r_width}|wpa2"
+    echo "${r_chan}|${r_hw}|${r_width}|wpa2|${has_24}|${has_5}|${has_ac}|${has_n}"
 }
 
 choose_wifi_interface() {
@@ -805,11 +811,53 @@ _step_firewall() {
 _step_hotspot() {
     print_step "Hotspot Settings"
     
-    # Auto-assign SSID and Password if not set
-    AP_SSID="${AP_SSID:-ap_${COUNTRY}}"
-    [[ -z "${AP_PASSWORD:-}" ]] && AP_PASSWORD="ChangeMe123!"
-    
-    print_info "SSID: ${AP_SSID}"
+    AP_SSID="$(prompt_default            "Hotspot SSID"       "${AP_SSID:-ap_${COUNTRY}}")"
+    AP_PASSWORD="$(prompt_default        "Hotspot Password"   "${AP_PASSWORD:-ChangeMe123!}")"
+
+    # Parse AUDIT_RESULT if set (Task 2: Select band here)
+    if [[ -n "${AUDIT_RESULT:-}" ]]; then
+        local audit="$AUDIT_RESULT"
+        local s_chan="${audit%%|*}"
+        local rest="${audit#*|}"
+        local s_hw="${rest%%|*}"
+        rest="${rest#*|}"
+        local s_width="${rest%%|*}"
+        rest="${rest#*|}"
+        local s_sec="${rest%%|*}"
+        rest="${rest#*|}"
+        local has_24="${rest%%|*}"
+        rest="${rest#*|}"
+        local has_5="${rest%%|*}"
+        rest="${rest#*|}"
+        local has_ac="${rest%%|*}"
+        rest="${rest#*|}"
+        local has_n="${rest%%|*}"
+
+        if [[ "$has_24" == "1" && "$has_5" == "1" ]]; then
+            local b_opts=("2.4" "5")
+            local b_lbls=("2.4 GHz (Longer range, slower)" "5 GHz (Shorter range, faster) (recommended)")
+            local b_idx=1
+            [[ "${AP_HW_MODE:-}" == "g" ]] && b_idx=0
+            local b_val
+            b_val=$(select_menu "Select WiFi Band" b_opts b_lbls "$b_idx") || return "$RC_ESC"
+            if [[ "$b_val" == "5" ]]; then
+                AP_HW_MODE="a"
+                AP_CHANNEL="36"
+                if [[ "$has_ac" == "1" ]]; then AP_CHANNEL_WIDTH="80"
+                elif [[ "$has_n" == "1" ]]; then AP_CHANNEL_WIDTH="40"
+                else AP_CHANNEL_WIDTH="20"; fi
+            else
+                AP_HW_MODE="g"
+                AP_CHANNEL="6"
+                AP_CHANNEL_WIDTH="20"
+            fi
+        else
+            AP_CHANNEL="$s_chan"
+            AP_HW_MODE="$s_hw"
+            AP_CHANNEL_WIDTH="$s_width"
+        fi
+        AP_SECURITY="${AP_SECURITY:-$s_sec}"
+    fi
     
     # Auto-apply WiFi technical settings
     if [[ -n "${AP_CHANNEL:-}" && -n "${AP_HW_MODE:-}" && -n "${AP_CHANNEL_WIDTH:-}" ]]; then
@@ -828,7 +876,7 @@ _step_hotspot() {
 _step_security() {
     print_step "WiFi Security"
     local opts=("wpa2" "wpa3" "mixed")
-    local lbls=("WPA2-PSK" "WPA3-SAE" "WPA2/WPA3 Mixed")
+    local lbls=("WPA2-PSK (recommended)" "WPA3-SAE" "WPA2/WPA3 Mixed")
     local idx; idx=$(find_index "${AP_SECURITY:-wpa2}" opts)
     local r
     r="$(select_menu "Security mode" opts lbls "$idx")" || return "$RC_ESC"
@@ -843,26 +891,10 @@ _step_network_interface() {
     AP_IFACE="$r"
     print_success "Interface: ${AP_IFACE}"
 
-    # Audit hardware and set suggestions
+    # Audit hardware and store results globally for _step_hotspot
     spinner_start "Auditing WiFi hardware capabilities…"
-    local audit; audit="$(audit_wifi_interface "$AP_IFACE")"
+    AUDIT_RESULT="$(audit_wifi_interface "$AP_IFACE")"
     spinner_stop
-
-    local s_chan="${audit%%|*}"
-    local rest="${audit#*|}"
-    local s_hw="${rest%%|*}"
-    rest="${rest#*|}"
-    local s_width="${rest%%|*}"
-    rest="${rest#*|}"
-    local s_sec="${rest}"
-
-    # Apply suggestions as defaults
-    AP_CHANNEL="${AP_CHANNEL:-$s_chan}"
-    AP_HW_MODE="${AP_HW_MODE:-$s_hw}"
-    AP_CHANNEL_WIDTH="${AP_CHANNEL_WIDTH:-$s_width}"
-    AP_SECURITY="${AP_SECURITY:-$s_sec}"
-
-    print_info "Suggested for ${AP_IFACE}: Channel ${s_chan}, Mode ${s_hw}, Width ${s_width}"
 }
 
 # ─── Full sequential wizard with proper back-navigation ───────────────────────
@@ -1006,7 +1038,7 @@ reset_country_vars() {
     AP_IFACE="" AP_SSID="" AP_PASSWORD=""
     AP_CHANNEL="" AP_HW_MODE="" AP_CHANNEL_WIDTH=""
     AP_IP="" AP_SUBNET="" AP_SECURITY=""
-    ROUTING_TABLE=""
+    ROUTING_TABLE="" AUDIT_RESULT=""
     load_credentials   # re-apply global creds
 }
 
