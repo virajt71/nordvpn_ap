@@ -48,7 +48,7 @@ print_banner() {
     echo >&2
 }
 
-# ─── Management Helpers (ported from manage.sh) ────────────────────────────────
+# ─── Management Helpers ────────────────────────────────────────────────────────
 
 list_countries() {
     [[ -d "$COUNTRIES_DIR" ]] || { echo; return; }
@@ -86,7 +86,35 @@ _assert_country() {
     [[ -d "${COUNTRIES_DIR}/${country}" ]] || { print_error "Country '$country' not found."; exit 1; }
 }
 
-# ─── Management Commands (ported from manage.sh) ───────────────────────────────
+# ─── Shared purge helper ───────────────────────────────────────────────────────
+# Removes containers (running OR stopped) and the wifi-ap image for a profile.
+# Safe to call regardless of current container state.
+_purge_country() {
+    local country="$1"
+
+    print_info "Purging containers and images for '${country}'..."
+
+    # compose down handles running + stopped containers within the project
+    compose_cmd "$country" down --remove-orphans --rmi all 2>/dev/null || true
+
+    # Belt-and-suspenders: remove by explicit name in case compose project
+    # mapping is stale or containers were created outside compose
+    for cname in "gluetun-${country}" "wifi-ap-${country}"; do
+        if docker inspect "$cname" &>/dev/null; then
+            docker rm -f "$cname" 2>/dev/null && \
+                print_info "Removed container: ${cname}" || true
+        fi
+    done
+
+    # Explicitly remove the wifi-ap image — compose --rmi all is unreliable
+    # for images built in prior sessions with a different compose invocation
+    if docker image inspect "wifi-ap-image-${country}" &>/dev/null; then
+        docker image rm -f "wifi-ap-image-${country}" 2>/dev/null && \
+            print_info "Removed image: wifi-ap-image-${country}" || true
+    fi
+}
+
+# ─── Management Commands ───────────────────────────────────────────────────────
 
 cmd_list() {
     print_step "Countries"
@@ -162,7 +190,6 @@ cmd_create() {
     while [[ " ${used_octets[*]} " =~ " $octet " ]]; do (( octet++ )); done
 
     cp "${ROOT_DIR}/.env.example" "$ef"
-    # Capitalize first letter for country default
     local default_country="${country^}"
 
     sed -i \
@@ -176,10 +203,6 @@ cmd_create() {
     chmod 600 "$ef"
 
     print_success "Created country profile '${country}'"
-    print_info "  Dir           : $dir"
-    print_info "  .env          : $ef"
-    print_info "  Routing table : $rt"
-    print_info "  Subnet        : 192.168.${octet}.0/24"
     echo
 }
 
@@ -210,7 +233,8 @@ cmd_down() {
 
     print_info "Tearing down country profile '$country' (removing containers + images)..."
     compose_cmd "$country" down --rmi all --remove-orphans || true
-    docker image rm "wifi-ap-image-${country}" 2>/dev/null || true
+    # Explicit image removal — compose --rmi all may miss images from prior sessions
+    docker image rm -f "wifi-ap-image-${country}" 2>/dev/null || true
     print_success "Country profile '$country' torn down."
 }
 
@@ -351,8 +375,7 @@ cmd_delete() {
     read -r -p "  Type 'delete' to confirm: " confirm
     [[ "$confirm" != "delete" ]] && { print_info "Aborted."; return; }
 
-    compose_cmd "$country" down --remove-orphans --rmi all 2>/dev/null || true
-    docker image rm "wifi-ap-image-${country}" 2>/dev/null || true
+    _purge_country "$country"
     rm -rf "${COUNTRIES_DIR}/${country}"
     print_success "Country profile '${country}' deleted."
 }
@@ -581,7 +604,7 @@ list_wifi_interfaces() {
                 vendor=$(udevadm info -q property -p "/sys/class/net/${iface}" | grep "ID_VENDOR_FROM_DATABASE" | cut -d= -f2 || true)
                 model=$(udevadm info -q property -p "/sys/class/net/${iface}" | grep "ID_MODEL_FROM_DATABASE" | cut -d= -f2 || true)
                 bus=$(udevadm info -q property -p "/sys/class/net/${iface}" | grep "ID_BUS" | cut -d= -f2 || true)
-                
+
                 local label=""
                 [[ -n "$vendor" ]] && label+="$vendor "
                 [[ -n "$model" ]] && label+="$model "
@@ -589,25 +612,23 @@ list_wifi_interfaces() {
                     pci) label+="(Built-in)" ;;
                     usb) label+="(External)" ;;
                 esac
-                desc=$(echo $label) # trim
+                desc=$(echo $label)
             fi
             echo "${iface}|${desc}"
         fi
     done
 }
 
-# ─── WiFi Audit (ported from check_wifi.sh) ───────────────────────────────────
+# ─── WiFi Audit ───────────────────────────────────────────────────────────────
 
-# Returns suggested: channel|hw_mode|width|security
 audit_wifi_interface() {
     local iface="$1"
-    
+
     if ! command -v iw >/dev/null 2>&1; then
         echo "6|g|20|wpa2"
         return
     fi
 
-    # Robust phy determination
     local phy
     phy=$(iw dev "$iface" info 2>/dev/null | awk '/wiphy/{print "phy"$2}')
     if [[ -z "$phy" && -f "/sys/class/net/${iface}/phy80211/index" ]]; then
@@ -625,14 +646,11 @@ audit_wifi_interface() {
         return
     fi
 
-    # AP mode check
     if ! echo "$iw_list" | grep -A 25 "Supported interface modes:" | grep -q "^\s*\* AP$"; then
-        # If AP mode not supported, we can't do much, but return something sane
         echo "6|g|20|wpa2"
         return
     fi
 
-    # Detection logic
     local has_24=0 has_5=0 has_ac=0 has_n=0
     [[ "$iw_list" =~ "Band 1" ]] && has_24=1
     [[ "$iw_list" =~ "Band 2" ]] && has_5=1
@@ -655,7 +673,6 @@ choose_wifi_interface() {
     local raw_data=()
     mapfile -t raw_data < <(list_wifi_interfaces)
 
-    # Collect interfaces already claimed by other country profiles
     local used_ifaces=()
     mapfile -t used_ifaces < <(
         find "${COUNTRIES_DIR}" -name '.env' \
@@ -667,7 +684,7 @@ choose_wifi_interface() {
     for line in "${raw_data[@]}"; do
         local iface="${line%%|*}"
         local desc="${line#*|}"
-        
+
         local skip=0
         for used in "${used_ifaces[@]}"; do
             if [[ "$iface" == "$used" && "$iface" != "${AP_IFACE:-}" ]]; then
@@ -675,7 +692,7 @@ choose_wifi_interface() {
             fi
         done
         (( skip )) && continue
-        
+
         vals+=("$iface")
         if [[ -n "$desc" ]]; then
             lbls+=("${iface} (${desc})")
@@ -716,7 +733,6 @@ ensure_nord_cache() {
     fi
 }
 
-# Sets SELECTED_COUNTRY and SELECTED_CITY (globals); returns RC_ESC on cancel
 choose_nord_location() {
     SELECTED_COUNTRY=""
     SELECTED_CITY=""
@@ -810,11 +826,10 @@ _step_firewall() {
 
 _step_hotspot() {
     print_step "Hotspot Settings"
-    
+
     AP_SSID="$(prompt_default            "Hotspot SSID"       "${AP_SSID:-ap_${COUNTRY}}")"
     AP_PASSWORD="$(prompt_default        "Hotspot Password"   "${AP_PASSWORD:-ChangeMe123!}")"
 
-    # Parse AUDIT_RESULT if set (Task 2: Select band here)
     if [[ -n "${AUDIT_RESULT:-}" ]]; then
         local audit="$AUDIT_RESULT"
         local s_chan="${audit%%|*}"
@@ -858,8 +873,7 @@ _step_hotspot() {
         fi
         AP_SECURITY="${AP_SECURITY:-$s_sec}"
     fi
-    
-    # Auto-apply WiFi technical settings
+
     if [[ -n "${AP_CHANNEL:-}" && -n "${AP_HW_MODE:-}" && -n "${AP_CHANNEL_WIDTH:-}" ]]; then
         print_info "WiFi: Channel ${AP_CHANNEL}, Mode ${AP_HW_MODE}, Width ${AP_CHANNEL_WIDTH}"
     else
@@ -891,13 +905,12 @@ _step_network_interface() {
     AP_IFACE="$r"
     print_success "Interface: ${AP_IFACE}"
 
-    # Audit hardware and store results globally for _step_hotspot
     spinner_start "Auditing WiFi hardware capabilities…"
     AUDIT_RESULT="$(audit_wifi_interface "$AP_IFACE")"
     spinner_stop
 }
 
-# ─── Full sequential wizard with proper back-navigation ───────────────────────
+# ─── Full sequential wizard with back-navigation ──────────────────────────────
 configure_env_full() {
     local step_fns=(
         _step_vpn_protocol
@@ -921,13 +934,11 @@ configure_env_full() {
                     print_info "Back to previous step."
                 else
                     print_warn "Already at first step. Esc again to cancel."
-                    # Give user a moment, then check if they want to abort entirely
                     local abort_opts=("continue" "cancel")
                     local abort_lbls=("Continue from start" "Cancel setup")
                     local choice
                     choice="$(select_menu "First step — what now?" abort_opts abort_lbls 0)" || return "$RC_ESC"
                     [[ "$choice" == "cancel" ]] && return "$RC_ESC"
-                    # stay at i=0
                 fi
             else
                 return "$rc"
@@ -943,7 +954,6 @@ configure_env_selective() {
     local opts=("protocol" "credentials" "network" "firewall" "hotspot" "security" "done")
 
     while true; do
-        # Labels rebuilt each iteration so current values reflect edits
         local lbls=(
             "VPN Protocol         [${VPN_TYPE:-not set}]"
             "VPN Credentials      [***]"
@@ -1029,7 +1039,6 @@ load_env() {
     load_credentials
 }
 
-# Reset all country-scoped vars to avoid cross-iteration bleed
 reset_country_vars() {
     COUNTRY="" ENV_FILE=""
     VPN_TYPE="" OPENVPN_USER="" OPENVPN_PASSWORD="" WIREGUARD_PRIVATE_KEY=""
@@ -1039,7 +1048,7 @@ reset_country_vars() {
     AP_CHANNEL="" AP_HW_MODE="" AP_CHANNEL_WIDTH=""
     AP_IP="" AP_SUBNET="" AP_SECURITY=""
     ROUTING_TABLE="" AUDIT_RESULT=""
-    load_credentials   # re-apply global creds
+    load_credentials
 }
 
 is_country_running() {
@@ -1094,8 +1103,7 @@ check_dependencies() {
 action_new() {
     print_step "Create New Country Profile"
     reset_country_vars
-    
-    # Initialize variables to avoid 'unbound variable' errors if Esc is pressed
+
     local SELECTED_COUNTRY=""
     local SELECTED_CITY=""
 
@@ -1105,7 +1113,6 @@ action_new() {
     SERVER_COUNTRIES="$SELECTED_COUNTRY"
     SERVER_CITIES="$SELECTED_CITY"
 
-    # Sanitize country name for folder/instance
     COUNTRY="$(echo "$SERVER_COUNTRIES" | tr '[:upper:]' '[:lower:]' | tr -cd 'a-z0-9_-')"
     [[ -z "$COUNTRY" ]] && COUNTRY="vpn0"
 
@@ -1209,7 +1216,6 @@ action_manage() {
             -exec basename {} \; 2>/dev/null | sort || true
     )
 
-    # Filter by running state
     local filtered=()
     local p
     for p in "${all_profiles[@]}"; do
@@ -1268,11 +1274,9 @@ action_delete() {
         return 0
     fi
 
-    if is_country_running "${del_choice}"; then
-        print_info "Stopping running containers first..."
-        cmd_down "$del_choice" 2>/dev/null || true
-    fi
-
+    # _purge_country handles running containers, stopped containers, and the
+    # wifi-ap image — no need to check is_country_running first
+    _purge_country "${del_choice}"
     rm -rf "${COUNTRIES_DIR}/${del_choice}"
     print_success "Profile '${del_choice}' deleted."
 }
