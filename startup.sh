@@ -235,13 +235,31 @@ prompt_secret() {
 list_wifi_interfaces() {
     for p in /sys/class/net/*; do
         local iface; iface="$(basename "$p")"
-        [[ -d "/sys/class/net/${iface}/wireless" ]] && echo "$iface"
+        if [[ -d "/sys/class/net/${iface}/wireless" ]]; then
+            local desc=""
+            if command -v udevadm >/dev/null 2>&1; then
+                local vendor model bus
+                vendor=$(udevadm info -q property -p "/sys/class/net/${iface}" | grep "ID_VENDOR_FROM_DATABASE" | cut -d= -f2 || true)
+                model=$(udevadm info -q property -p "/sys/class/net/${iface}" | grep "ID_MODEL_FROM_DATABASE" | cut -d= -f2 || true)
+                bus=$(udevadm info -q property -p "/sys/class/net/${iface}" | grep "ID_BUS" | cut -d= -f2 || true)
+                
+                local label=""
+                [[ -n "$vendor" ]] && label+="$vendor "
+                [[ -n "$model" ]] && label+="$model "
+                case "$bus" in
+                    pci) label+="(Built-in)" ;;
+                    usb) label+="(External)" ;;
+                esac
+                desc=$(echo $label) # trim
+            fi
+            echo "${iface}|${desc}"
+        fi
     done
 }
 
 choose_wifi_interface() {
-    local interfaces=()
-    mapfile -t interfaces < <(list_wifi_interfaces)
+    local raw_data=()
+    mapfile -t raw_data < <(list_wifi_interfaces)
 
     # Collect interfaces already claimed by other instances
     local used_ifaces=()
@@ -250,29 +268,36 @@ choose_wifi_interface() {
             -exec grep -h '^AP_IFACE=' {} \; 2>/dev/null | cut -d= -f2 || true
     )
 
-    local available=()
-    local iface
-    for iface in "${interfaces[@]}"; do
+    local vals=()
+    local lbls=()
+    for line in "${raw_data[@]}"; do
+        local iface="${line%%|*}"
+        local desc="${line#*|}"
+        
         local skip=0
-        local used
         for used in "${used_ifaces[@]}"; do
-            # Allow current instance's own iface
             if [[ "$iface" == "$used" && "$iface" != "${AP_IFACE:-}" ]]; then
                 skip=1; break
             fi
         done
         (( skip )) && continue
-        available+=("$iface")
+        
+        vals+=("$iface")
+        if [[ -n "$desc" ]]; then
+            lbls+=("${iface} (${desc})")
+        else
+            lbls+=("${iface}")
+        fi
     done
 
-    if [[ ${#available[@]} -eq 0 ]]; then
+    if [[ ${#vals[@]} -eq 0 ]]; then
         print_warn "No free WiFi interfaces found."
         printf '%s' "${AP_IFACE:-wlan0}"
         return 0
     fi
 
-    local idx; idx=$(find_index "${AP_IFACE:-wlan0}" available)
-    select_menu "Select WiFi interface" available available "$idx"
+    local idx; idx=$(find_index "${AP_IFACE:-wlan0}" vals)
+    select_menu "Select WiFi interface" vals lbls "$idx"
 }
 
 # ─── NordVPN location picker ──────────────────────────────────────────────────
@@ -519,19 +544,28 @@ save_env() {
     umask 077
     cat > "$ENV_FILE" <<EOF
 INSTANCE=${INSTANCE}
+
 ROUTING_TABLE=${ROUTING_TABLE:-100}
+
 VPN_TYPE=${VPN_TYPE:-wireguard}
+
 SERVER_COUNTRIES=${SERVER_COUNTRIES:-}
 SERVER_CITIES=${SERVER_CITIES:-}
+
 FIREWALL_OUTBOUND_SUBNETS=${FIREWALL_OUTBOUND_SUBNETS:-192.168.50.10/32}
+
 AP_IFACE=${AP_IFACE:-}
+
 AP_SSID=${AP_SSID:-}
 AP_PASSWORD=${AP_PASSWORD:-}
+
 AP_CHANNEL=${AP_CHANNEL:-6}
 AP_HW_MODE=${AP_HW_MODE:-g}
 AP_CHANNEL_WIDTH=${AP_CHANNEL_WIDTH:-20}
+
 AP_IP=${AP_IP:-192.168.60.1}
 AP_SUBNET=${AP_SUBNET:-192.168.60.0/24}
+
 AP_SECURITY=${AP_SECURITY:-wpa2}
 EOF
     umask "$old_umask"
@@ -567,9 +601,6 @@ is_instance_running() {
 
 # ─── Dependency check ─────────────────────────────────────────────────────────
 check_dependencies() {
-    local dep_file="${ROOT_DIR}/.deps_ok"
-    [[ -f "$dep_file" ]] && return 0
-
     local missing=() d
     for d in curl jq fzf docker; do
         command -v "$d" >/dev/null 2>&1 || missing+=("$d")
@@ -581,7 +612,6 @@ check_dependencies() {
     fi
 
     if [[ ${#missing[@]} -eq 0 ]]; then
-        touch "$dep_file"
         return 0
     fi
 
