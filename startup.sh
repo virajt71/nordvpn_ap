@@ -198,7 +198,8 @@ cmd_create() {
         -e "s/^AP_IP=.*/AP_IP=192.168.${octet}.1/" \
         -e "s/^AP_SUBNET=.*/AP_SUBNET=192.168.${octet}.0\/24/" \
         -e "s/^AP_SSID=.*/AP_SSID=ap_${country}/" \
-        -e "s/^SERVER_COUNTRIES=.*/SERVER_COUNTRIES=${default_country}/" \
+        -e "s/^SERVER_COUNTRIES=.*/SERVER_COUNTRIES=${SERVER_COUNTRIES:-${default_country}}/" \
+        -e "s/^SERVER_CITIES=.*/SERVER_CITIES=${SERVER_CITIES:-}/" \
         "$ef"
     chmod 600 "$ef"
 
@@ -212,8 +213,12 @@ cmd_start() {
     _assert_country "$country"
 
     print_info "Starting country profile '$country'..."
-    compose_cmd "$country" up -d --build
-    print_success "Country profile '$country' started."
+    if compose_cmd "$country" up -d --build; then
+        print_success "Country profile '$country' started."
+    else
+        print_error "Failed to start country profile '$country'."
+        return 1
+    fi
 }
 
 cmd_stop() {
@@ -222,8 +227,12 @@ cmd_stop() {
     _assert_country "$country"
 
     print_info "Stopping country profile '$country'..."
-    compose_cmd "$country" stop
-    print_success "Country profile '$country' stopped."
+    if compose_cmd "$country" stop; then
+        print_success "Country profile '$country' stopped."
+    else
+        print_error "Failed to stop country profile '$country'."
+        return 1
+    fi
 }
 
 cmd_down() {
@@ -232,18 +241,29 @@ cmd_down() {
     _assert_country "$country"
 
     print_info "Tearing down country profile '$country' (removing containers + images)..."
-    compose_cmd "$country" down --rmi all --remove-orphans || true
+    local rc=0
+    compose_cmd "$country" down --rmi all --remove-orphans || rc=$?
     # Explicit image removal — compose --rmi all may miss images from prior sessions
     docker image rm -f "wifi-ap-image-${country}" 2>/dev/null || true
-    print_success "Country profile '$country' torn down."
+    
+    if (( rc == 0 )); then
+        print_success "Country profile '$country' torn down."
+    else
+        print_error "Tear down for '$country' encountered errors (containers might be partially removed)."
+        return "$rc"
+    fi
 }
 
 cmd_restart() {
     local country="${1:-}"
     [[ -z "$country" ]] && { print_error "Usage: restart <country>"; exit 1; }
     _assert_country "$country"
-    compose_cmd "$country" restart
-    print_success "Country profile '$country' restarted."
+    if compose_cmd "$country" restart; then
+        print_success "Country profile '$country' restarted."
+    else
+        print_error "Failed to restart country profile '$country'."
+        return 1
+    fi
 }
 
 cmd_start_all() {
@@ -282,7 +302,7 @@ cmd_status() {
     local country="${1:-}"
     [[ -z "$country" ]] && { print_error "Usage: status <country>"; exit 1; }
     _assert_country "$country"
-    compose_cmd "$country" ps
+    compose_cmd "$country" ps || { print_error "Failed to get status for '$country'."; return 1; }
 }
 
 cmd_health() {
@@ -372,8 +392,10 @@ cmd_delete() {
     _assert_country "$country"
 
     print_warn "This will stop and DELETE country profile '${country}' and all its config."
-    read -r -p "  Type 'delete' to confirm: " confirm
-    [[ "$confirm" != "delete" ]] && { print_info "Aborted."; return; }
+    if ! prompt_delete_confirm; then
+        print_info "Aborted."
+        return
+    fi
 
     _purge_country "$country"
     rm -rf "${COUNTRIES_DIR}/${country}"
@@ -593,6 +615,36 @@ prompt_secret() {
     printf '%s' "$value"
 }
 
+prompt_delete_confirm() {
+    local value=""
+    printf "  Type ${COLOR_BOLD}'delete'${COLOR_RESET} to confirm (Esc to abort): " >&2
+    while true; do
+        read_key
+        case "$KEY_SEQ" in
+            ENTER)
+                echo >&2
+                [[ "$value" == "delete" ]] && return 0 || return 1
+                ;;
+            ESC)
+                echo >&2
+                return "$RC_ESC"
+                ;;
+            UP|DOWN|UNKNOWN) ;;
+            *)
+                if [[ "$KEY_SEQ" == $'\177' || "$KEY_SEQ" == $'\b' ]]; then
+                    if [[ -n "$value" ]]; then
+                        value="${value%?}"
+                        printf "\b \b" >&2
+                    fi
+                elif [[ ${#KEY_SEQ} -eq 1 ]]; then
+                    value+="$KEY_SEQ"
+                    printf "%s" "$KEY_SEQ" >&2
+                fi
+                ;;
+        esac
+    done
+}
+
 # ─── WiFi interface ───────────────────────────────────────────────────────────
 list_wifi_interfaces() {
     for p in /sys/class/net/*; do
@@ -776,6 +828,9 @@ choose_nord_location() {
                   --color="border:#4a90d9,prompt:#7ec8e3,pointer:#00c896" 2>/dev/tty
         )" || city="(Any — country only)"
         [[ "$city" != "(Any — country only)" && -n "$city" ]] && SELECTED_CITY="$city"
+    elif (( city_count == 1 )); then
+        SELECTED_CITY="$(echo "$cities_json" | tr -d '\r\n' | xargs)"
+        print_info "Automatically selected city: ${SELECTED_CITY}"
     fi
 }
 
@@ -1055,7 +1110,12 @@ is_country_running() {
     local name="$1"
     local ap_st; ap_st="$(docker inspect -f '{{.State.Status}}' "wifi-ap-${name}" 2>/dev/null || true)"
     local gt_st; gt_st="$(docker inspect -f '{{.State.Status}}' "gluetun-${name}" 2>/dev/null || true)"
-    [[ "$ap_st" == "running" || "$gt_st" == "running" ]]
+    [[ "$ap_st" == "running" || "$ap_st" == "restarting" || "$gt_st" == "running" || "$gt_st" == "restarting" ]]
+}
+
+has_country_containers() {
+    local name="$1"
+    docker inspect "wifi-ap-${name}" &>/dev/null || docker inspect "gluetun-${name}" &>/dev/null
 }
 
 # ─── Dependency check ─────────────────────────────────────────────────────────
@@ -1132,7 +1192,7 @@ action_new() {
         local go
         read -r -p "  Start profile '${COUNTRY}' now? [Y/n]: " go
         if [[ ! "${go:-Y}" =~ ^[Nn]$ ]]; then
-            cmd_start "$COUNTRY"
+            cmd_start "$COUNTRY" || true
         else
             print_info "Run later: ./startup.sh start ${COUNTRY}"
         fi
@@ -1175,13 +1235,13 @@ action_existing() {
                 local go
                 read -r -p "  Profile '${COUNTRY}' is already running. Restart it? [y/N]: " go
                 if [[ "${go:-N}" =~ ^[Yy]$ ]]; then
-                    cmd_restart "$COUNTRY"
+                    cmd_restart "$COUNTRY" || true
                 else
                     print_info "Leaving '${COUNTRY}' running."
                 fi
             else
                 print_info "Starting '${COUNTRY}'..."
-                cmd_start "$COUNTRY"
+                cmd_start "$COUNTRY" || true
             fi
             ;;
         selective)
@@ -1200,11 +1260,12 @@ action_existing() {
 }
 
 action_manage() {
-    local manage_opts=("start" "stop" "down")
+    local manage_opts=("start" "stop" "restart" "down")
     local manage_lbls=(
-        "▶  Start a profile"
-        "⏸  Stop  (keeps containers)"
-        "⏹  Down  (removes containers + image)"
+        "▶  Start   (if stopped/new)"
+        "⏸  Stop    (running/restarting/exited)"
+        "↻  Restart (running/restarting)"
+        "⏹  Down    (cleanup containers/image)"
     )
     local manage_action
     manage_action="$(select_menu "Manage Activity" manage_opts manage_lbls 0 \
@@ -1221,17 +1282,23 @@ action_manage() {
     for p in "${all_profiles[@]}"; do
         local is_running=0
         is_country_running "$p" && is_running=1
+        
+        local has_ct=0
+        has_country_containers "$p" && has_ct=1
 
         case "$manage_action" in
-            start) (( is_running == 0 )) && filtered+=("$p") ;;
-            stop|down) (( is_running == 1 )) && filtered+=("$p") ;;
+            start)   (( is_running == 0 )) && filtered+=("$p") ;;
+            stop)    (( has_ct == 1 )) && filtered+=("$p") ;;
+            restart) (( is_running == 1 )) && filtered+=("$p") ;;
+            down)    (( has_ct == 1 )) && filtered+=("$p") ;;
         esac
     done
 
     if [[ ${#filtered[@]} -eq 0 ]]; then
         case "$manage_action" in
-            start) print_warn "All profiles already running." ;;
-            *)     print_warn "No active profiles running." ;;
+            start)   print_warn "No profiles found that can be started." ;;
+            restart) print_warn "No active profiles running/restarting." ;;
+            *)       print_warn "No profiles found with active or stopped containers." ;;
         esac
         return 0
     fi
@@ -1241,12 +1308,14 @@ action_manage() {
         "↑↓ navigate  ·  Enter select  ·  Esc → action menu")" || return 0
 
     case "$manage_action" in
-        start) print_info "Starting ${stack_choice}..."
-               cmd_start "$stack_choice" ;;
-        stop)  print_info "Stopping ${stack_choice}..."
-               cmd_stop "$stack_choice" ;;
-        down)  print_info "Tearing down ${stack_choice}..."
-               cmd_down "$stack_choice" ;;
+        start)   print_info "Starting ${stack_choice}..."
+                 cmd_start "$stack_choice" || true ;;
+        stop)    print_info "Stopping ${stack_choice}..."
+                 cmd_stop "$stack_choice" || true ;;
+        restart) print_info "Restarting ${stack_choice}..."
+                 cmd_restart "$stack_choice" || true ;;
+        down)    print_info "Tearing down ${stack_choice}..."
+                 cmd_down "$stack_choice" || true ;;
     esac
 }
 
@@ -1267,9 +1336,7 @@ action_delete() {
 
     echo >&2
     print_warn "Permanently delete profile '${del_choice}' and all its config."
-    local confirm
-    read -r -p "  Type 'delete' to confirm: " confirm
-    if [[ "$confirm" != "delete" ]]; then
+    if ! prompt_delete_confirm; then
         print_info "Aborted."
         return 0
     fi
