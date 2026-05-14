@@ -1394,13 +1394,13 @@ main() {
     print_banner
     load_credentials
 
-    local top_opts=("new" "existing" "manage" "delete" "credentials" "quit")
+    local top_opts=("new" "existing" "credentials" "manage" "delete" "quit")
     local top_lbls=(
         "🌍 Create new VPN profile"
         "✎  Edit existing profile"
+        "🔑 Update VPN credentials"
         "⏹  Manage Activity"
         "🗑  Delete profile"
-        "🔑 Update VPN credentials"
         "✖  Quit"
     )
 
