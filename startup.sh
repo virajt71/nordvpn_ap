@@ -68,6 +68,17 @@ load_country_env() {
 compose_cmd() {
     local country="$1"; shift
     local ef; ef="$(env_file "$country")"
+    
+    # Unset potentially conflicting variables from the shell environment
+    # to ensure they don't override values in the country-specific .env file.
+    local var; for var in COUNTRY VPN_TYPE OPENVPN_USER OPENVPN_PASSWORD \
+                          WIREGUARD_PRIVATE_KEY SERVER_COUNTRIES SERVER_CITIES \
+                          FIREWALL_OUTBOUND_SUBNETS AP_IFACE AP_SSID AP_PASSWORD \
+                          AP_CHANNEL AP_HW_MODE AP_CHANNEL_WIDTH AP_IP AP_SUBNET \
+                          AP_SECURITY AP_COUNTRY_CODE ROUTING_TABLE; do
+        unset "$var"
+    done
+
     COUNTRY="$country" docker compose \
         --project-name "$country" \
         --project-directory "$ROOT_DIR" \
@@ -131,8 +142,8 @@ cmd_list() {
     for country in "${countries[@]}"; do
         local ef; ef="$(env_file "$country")"
         local vpn ssid gluetun_st wifiap_st
-        vpn="$(grep -E '^VPN_TYPE=' "$ef" 2>/dev/null | cut -d= -f2 || echo '?')"
-        ssid="$(grep -E '^AP_SSID=' "$ef" 2>/dev/null | cut -d= -f2 || echo '?')"
+        vpn="$(grep -E '^VPN_TYPE=' "$ef" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo '?')"
+        ssid="$(grep -E '^AP_SSID=' "$ef" 2>/dev/null | cut -d= -f2 | tr -d '"' || echo '?')"
 
         if container_running "gluetun-${country}"; then
             gluetun_st="${COLOR_GREEN}running${COLOR_RESET}"
@@ -172,7 +183,7 @@ cmd_create() {
     mapfile -t used_tables < <(
         for i_dir in "${COUNTRIES_DIR}"/*/; do
             local i_env="${i_dir}.env"
-            [[ -f "$i_env" ]] && grep -E '^ROUTING_TABLE=' "$i_env" | cut -d= -f2 || true
+            [[ -f "$i_env" ]] && grep -E '^ROUTING_TABLE=' "$i_env" | cut -d= -f2 | tr -d '"' || true
         done
     )
     local rt=100
@@ -193,13 +204,13 @@ cmd_create() {
     local default_country="${country^}"
 
     sed -i \
-        -e "s/^COUNTRY=.*/COUNTRY=${country}/" \
-        -e "s/^ROUTING_TABLE=.*/ROUTING_TABLE=${rt}/" \
-        -e "s/^AP_IP=.*/AP_IP=192.168.${octet}.1/" \
-        -e "s/^AP_SUBNET=.*/AP_SUBNET=192.168.${octet}.0\/24/" \
-        -e "s/^AP_SSID=.*/AP_SSID=ap_${country}/" \
-        -e "s/^SERVER_COUNTRIES=.*/SERVER_COUNTRIES=${SERVER_COUNTRIES:-${default_country}}/" \
-        -e "s/^SERVER_CITIES=.*/SERVER_CITIES=${SERVER_CITIES:-}/" \
+        -e "s/^COUNTRY=.*/COUNTRY=\"${country}\"/" \
+        -e "s/^ROUTING_TABLE=.*/ROUTING_TABLE=\"${rt}\"/" \
+        -e "s/^AP_IP=.*/AP_IP=\"192.168.${octet}.1\"/" \
+        -e "s/^AP_SUBNET=.*/AP_SUBNET=\"192.168.${octet}.0\/24\"/" \
+        -e "s/^AP_SSID=.*/AP_SSID=\"ap_${country}\"/" \
+        -e "s/^SERVER_COUNTRIES=.*/SERVER_COUNTRIES=\"${SERVER_COUNTRIES:-${default_country}}\"/" \
+        -e "s/^SERVER_CITIES=.*/SERVER_CITIES=\"${SERVER_CITIES:-}\"/" \
         "$ef"
     chmod 600 "$ef"
 
@@ -333,8 +344,8 @@ cmd_health() {
             print_success "    wifi-ap-${country}: running"
             local ef; ef="$(env_file "$country")"
             local rt ap_sub
-            rt="$(grep -E '^ROUTING_TABLE=' "$ef" | cut -d= -f2 || echo '?')"
-            ap_sub="$(grep -E '^AP_SUBNET=' "$ef" | cut -d= -f2 || echo '?')"
+            rt="$(grep -E '^ROUTING_TABLE=' "$ef" | cut -d= -f2 | tr -d '"' || echo '?')"
+            ap_sub="$(grep -E '^AP_SUBNET=' "$ef" | cut -d= -f2 | tr -d '"' || echo '?')"
             if ip rule show | grep -q "lookup ${rt}"; then
                 print_success "    Routing table ${rt}: present"
             else
@@ -360,10 +371,10 @@ cmd_check_conflicts() {
         local ef; ef="$(env_file "$country")"
 
         local iface rt subnet ssid
-        iface="$(grep -E '^AP_IFACE=' "$ef" | cut -d= -f2)"
-        rt="$(grep -E '^ROUTING_TABLE=' "$ef" | cut -d= -f2)"
-        subnet="$(grep -E '^AP_SUBNET=' "$ef" | cut -d= -f2)"
-        ssid="$(grep -E '^AP_SSID=' "$ef" | cut -d= -f2)"
+        iface="$(grep -E '^AP_IFACE=' "$ef" | cut -d= -f2 | tr -d '"')"
+        rt="$(grep -E '^ROUTING_TABLE=' "$ef" | cut -d= -f2 | tr -d '"')"
+        subnet="$(grep -E '^AP_SUBNET=' "$ef" | cut -d= -f2 | tr -d '"')"
+        ssid="$(grep -E '^AP_SSID=' "$ef" | cut -d= -f2 | tr -d '"')"
 
         for key in iface rt subnet ssid; do
             local val="${!key}"
@@ -728,7 +739,7 @@ choose_wifi_interface() {
     local used_ifaces=()
     mapfile -t used_ifaces < <(
         find "${COUNTRIES_DIR}" -name '.env' \
-            -exec grep -h '^AP_IFACE=' {} \; 2>/dev/null | cut -d= -f2 || true
+            -exec grep -h '^AP_IFACE=' {} \; 2>/dev/null | cut -d= -f2 | tr -d '"' || true
     )
 
     local vals=()
@@ -1058,30 +1069,30 @@ save_env() {
     local old_umask; old_umask=$(umask)
     umask 077
     cat > "$ENV_FILE" <<EOF
-COUNTRY=${COUNTRY}
+COUNTRY="${COUNTRY}"
 
-ROUTING_TABLE=${ROUTING_TABLE:-100}
+ROUTING_TABLE="${ROUTING_TABLE:-100}"
 
-VPN_TYPE=${VPN_TYPE:-wireguard}
+VPN_TYPE="${VPN_TYPE:-wireguard}"
 
-SERVER_COUNTRIES=${SERVER_COUNTRIES:-}
-SERVER_CITIES=${SERVER_CITIES:-}
+SERVER_COUNTRIES="${SERVER_COUNTRIES:-}"
+SERVER_CITIES="${SERVER_CITIES:-}"
 
-FIREWALL_OUTBOUND_SUBNETS=${FIREWALL_OUTBOUND_SUBNETS:-192.168.50.10/32}
+FIREWALL_OUTBOUND_SUBNETS="${FIREWALL_OUTBOUND_SUBNETS:-192.168.50.10/32}"
 
-AP_IFACE=${AP_IFACE:-}
+AP_IFACE="${AP_IFACE:-}"
 
-AP_SSID=${AP_SSID:-}
-AP_PASSWORD=${AP_PASSWORD:-}
+AP_SSID="${AP_SSID:-}"
+AP_PASSWORD="${AP_PASSWORD:-}"
 
-AP_CHANNEL=${AP_CHANNEL:-6}
-AP_HW_MODE=${AP_HW_MODE:-g}
-AP_CHANNEL_WIDTH=${AP_CHANNEL_WIDTH:-20}
+AP_CHANNEL="${AP_CHANNEL:-6}"
+AP_HW_MODE="${AP_HW_MODE:-g}"
+AP_CHANNEL_WIDTH="${AP_CHANNEL_WIDTH:-20}"
 
-AP_IP=${AP_IP:-192.168.60.1}
-AP_SUBNET=${AP_SUBNET:-192.168.60.0/24}
+AP_IP="${AP_IP:-192.168.60.1}"
+AP_SUBNET="${AP_SUBNET:-192.168.60.0/24}"
 
-AP_SECURITY=${AP_SECURITY:-wpa2}
+AP_SECURITY="${AP_SECURITY:-wpa2}"
 EOF
     umask "$old_umask"
     chmod 600 "$ENV_FILE"

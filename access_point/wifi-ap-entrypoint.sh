@@ -10,6 +10,7 @@ AP_CHANNEL="${AP_CHANNEL:-6}"
 AP_HW_MODE="${AP_HW_MODE:-g}"
 AP_CHANNEL_WIDTH="${AP_CHANNEL_WIDTH:-20}"
 AP_SECURITY="${AP_SECURITY:-wpa2}"
+AP_COUNTRY_CODE="${AP_COUNTRY_CODE:-US}"
 COUNTRY="${COUNTRY:-vpn0}"
 # ROUTING_TABLE must not collide across instances; pass explicitly from .env
 ROUTING_TABLE="${ROUTING_TABLE:-100}"
@@ -17,8 +18,17 @@ ROUTING_TABLE="${ROUTING_TABLE:-100}"
 TAG="[wifi-ap/${COUNTRY}]"
 
 find_vpn_pid() {
-    for pid in /proc/[0-9]*/net/dev; do
-        grep -q "tun0" "$pid" 2>/dev/null && echo "${pid%%/net/*}" | tr -d '/proc/' && return 0
+    # Search for a process that has PROFILE_NAME=<our_country> in its environment
+    # and also has a tun0 interface in its network namespace.
+    for pid_path in /proc/[0-9]*/environ; do
+        if grep -zaq "^PROFILE_NAME=${COUNTRY}$" "$pid_path" 2>/dev/null; then
+            local pid="${pid_path%/environ}"
+            pid="${pid#/proc/}"
+            if [ -f "/proc/$pid/net/dev" ] && grep -q "tun0" "/proc/$pid/net/dev" 2>/dev/null; then
+                echo "$pid"
+                return 0
+            fi
+        fi
     done
     return 1
 }
@@ -30,6 +40,8 @@ driver=nl80211
 ssid=${AP_SSID}
 channel=${AP_CHANNEL}
 hw_mode=${AP_HW_MODE}
+country_code=${AP_COUNTRY_CODE}
+ieee80211d=0
 ieee80211n=1
 wmm_enabled=1
 auth_algs=1
@@ -67,9 +79,9 @@ EOF
 
     cat >> /tmp/hostapd-${COUNTRY}.conf <<EOF
 logger_syslog=-1
-logger_syslog_level=2
+logger_syslog_level=0
 logger_stdout=-1
-logger_stdout_level=2
+logger_stdout_level=0
 EOF
 
     if [[ "$AP_HW_MODE" == "a" || "$AP_HW_MODE" == "ac" || "$AP_HW_MODE" == "ax" ]]; then
@@ -85,6 +97,8 @@ write_dnsmasq_conf() {
     dhcp_base="$(echo "$AP_IP" | awk -F. '{print $1"."$2"."$3}')"
     cat > /tmp/dnsmasq-${COUNTRY}.conf <<EOF
 interface=${AP_IFACE}
+except-interface=lo
+listen-address=${AP_IP}
 bind-interfaces
 no-daemon
 dhcp-range=${dhcp_base}.10,${dhcp_base}.100,12h
