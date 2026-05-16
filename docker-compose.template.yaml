@@ -18,6 +18,11 @@ services:
       - SERVER_CITIES=${SERVER_CITIES}
       - FIREWALL_OUTBOUND_SUBNETS=${FIREWALL_OUTBOUND_SUBNETS}
       - PROFILE_NAME=${COUNTRY}
+    ports:
+      - "${AP_IP}:53:53/tcp"
+      - "${AP_IP}:53:53/udp"
+      - "${AP_IP}:3000:3000/tcp"
+      - "${AP_IP}:80:80/tcp"
     sysctls:
       - net.ipv4.ip_forward=1
     healthcheck:
@@ -50,6 +55,18 @@ services:
       - AP_COUNTRY_CODE=${AP_COUNTRY_CODE:-US}
       - ROUTING_TABLE=${ROUTING_TABLE}
       - COUNTRY=${COUNTRY}
+    depends_on:
+      gluetun:
+        condition: service_healthy
+    restart: unless-stopped
+
+  adguard:
+    image: adguard/adguardhome
+    container_name: adguard-${COUNTRY}
+    network_mode: service:gluetun
+    volumes:
+      - ./country/${COUNTRY}/adguard-work:/opt/adguardhome/work
+      - ./country/${COUNTRY}/adguard-conf:/opt/adguardhome/conf
     depends_on:
       gluetun:
         condition: service_healthy

@@ -101,12 +101,11 @@ except-interface=lo
 listen-address=${AP_IP}
 bind-interfaces
 no-daemon
+port=0
 dhcp-range=${dhcp_base}.10,${dhcp_base}.100,12h
 dhcp-option=3,${AP_IP}
-dhcp-option=6,103.86.96.100,103.86.99.100
+dhcp-option=6,${AP_IP}
 no-resolv
-server=103.86.96.100
-server=103.86.99.100
 dhcp-leasefile=/tmp/dnsmasq-${COUNTRY}.leases
 EOF
 }

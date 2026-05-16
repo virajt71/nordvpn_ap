@@ -110,7 +110,7 @@ _purge_country() {
 
     # Belt-and-suspenders: remove by explicit name in case compose project
     # mapping is stale or containers were created outside compose
-    for cname in "gluetun-${country}" "wifi-ap-${country}"; do
+    for cname in "gluetun-${country}" "wifi-ap-${country}" "adguard-${country}"; do
         if docker inspect "$cname" &>/dev/null; then
             docker rm -f "$cname" 2>/dev/null && \
                 print_info "Removed container: ${cname}" || true
@@ -135,9 +135,9 @@ cmd_list() {
         return
     fi
 
-    printf "\n  ${COLOR_BOLD}%-12s %-12s %-16s %-16s %-20s${COLOR_RESET}\n" \
-        "COUNTRY" "VPN" "GLUETUN" "WIFI-AP" "SSID"
-    printf "  %s\n" "$(printf '%.0s─' {1..80})"
+    printf "\n  ${COLOR_BOLD}%-12s %-12s %-16s %-16s %-16s %-20s${COLOR_RESET}\n" \
+        "COUNTRY" "VPN" "GLUETUN" "WIFI-AP" "ADGUARD" "SSID"
+    printf "  %s\n" "$(printf '%.0s─' {1..100})"
 
     for country in "${countries[@]}"; do
         local ef; ef="$(env_file "$country")"
@@ -157,8 +157,15 @@ cmd_list() {
             wifiap_st="${COLOR_RED}stopped${COLOR_RESET}"
         fi
 
-        printf "  %-12s %-12s %-25b %-25b %-20s\n" \
-            "$country" "$vpn" "$gluetun_st" "$wifiap_st" "$ssid"
+        local adguard_st
+        if container_running "adguard-${country}"; then
+            adguard_st="${COLOR_GREEN}running${COLOR_RESET}"
+        else
+            adguard_st="${COLOR_RED}stopped${COLOR_RESET}"
+        fi
+
+        printf "  %-12s %-12s %-25b %-25b %-25b %-20s\n" \
+            "$country" "$vpn" "$gluetun_st" "$wifiap_st" "$adguard_st" "$ssid"
     done
     echo
 }
@@ -177,6 +184,8 @@ cmd_create() {
     fi
 
     mkdir -p "$dir/gluetun-state"
+    mkdir -p "$dir/adguard-work"
+    mkdir -p "$dir/adguard-conf"
 
     # Auto-assign routing table — find next free ID starting at 100
     local used_tables=()
@@ -1121,12 +1130,13 @@ is_country_running() {
     local name="$1"
     local ap_st; ap_st="$(docker inspect -f '{{.State.Status}}' "wifi-ap-${name}" 2>/dev/null || true)"
     local gt_st; gt_st="$(docker inspect -f '{{.State.Status}}' "gluetun-${name}" 2>/dev/null || true)"
-    [[ "$ap_st" == "running" || "$ap_st" == "restarting" || "$gt_st" == "running" || "$gt_st" == "restarting" ]]
+    local ag_st; ag_st="$(docker inspect -f '{{.State.Status}}' "adguard-${name}" 2>/dev/null || true)"
+    [[ "$ap_st" == "running" || "$ap_st" == "restarting" || "$gt_st" == "running" || "$gt_st" == "restarting" || "$ag_st" == "running" || "$ag_st" == "restarting" ]]
 }
 
 has_country_containers() {
     local name="$1"
-    docker inspect "wifi-ap-${name}" &>/dev/null || docker inspect "gluetun-${name}" &>/dev/null
+    docker inspect "wifi-ap-${name}" &>/dev/null || docker inspect "gluetun-${name}" &>/dev/null || docker inspect "adguard-${name}" &>/dev/null
 }
 
 # ─── Dependency check ─────────────────────────────────────────────────────────
