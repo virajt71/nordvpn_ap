@@ -93,6 +93,7 @@ EOF
 }
 
 write_dnsmasq_conf() {
+    local gip=$1
     local dhcp_base
     dhcp_base="$(echo "$AP_IP" | awk -F. '{print $1"."$2"."$3}')"
     cat > /tmp/dnsmasq-${COUNTRY}.conf <<EOF
@@ -104,7 +105,7 @@ no-daemon
 port=0
 dhcp-range=${dhcp_base}.10,${dhcp_base}.100,12h
 dhcp-option=3,${AP_IP}
-dhcp-option=6,${AP_IP}
+dhcp-option=6,${gip}
 no-resolv
 dhcp-leasefile=/tmp/dnsmasq-${COUNTRY}.leases
 EOF
@@ -112,10 +113,9 @@ EOF
 
 setup_routing() {
     local gpid=$1
-    local gip gw bridge
+    local gip=$2
+    local gw bridge
 
-    gip=$(nsenter -t "$gpid" -n -- ip addr show eth0 2>/dev/null \
-        | awk '/inet /{print $2}' | cut -d/ -f1)
     gw=$(nsenter -t "$gpid" -n -- ip route show default 2>/dev/null | awk '{print $3}')
     bridge=$(ip -o -4 addr show | awk -v gw="$gw" '$4 ~ "^"gw"/" {print $2}')
     if [ -z "$bridge" ]; then
@@ -182,8 +182,11 @@ for i in $(seq 1 30); do
 done
 [[ -z "$GLUETUN_PID" ]] && { echo "ERROR ${TAG}: VPN tun0 not found after 60s."; exit 1; }
 
+GLUETUN_IP=$(nsenter -t "$GLUETUN_PID" -n -- ip addr show eth0 2>/dev/null \
+    | awk '/inet /{print $2}' | cut -d/ -f1)
+
 write_hostapd_conf
-write_dnsmasq_conf
+write_dnsmasq_conf "$GLUETUN_IP"
 
 echo "==> ${TAG} Configuring $AP_IFACE..."
 ip link set "$AP_IFACE" down 2>/dev/null || true
@@ -208,10 +211,11 @@ sleep 2
 
 echo "==> ${TAG} Starting dnsmasq..."
 dnsmasq --conf-file=/tmp/dnsmasq-${COUNTRY}.conf --no-daemon &
+DNSMASQ_PID=$!
 sleep 1
 
 echo "==> ${TAG} Setting up VPN routing (table ${ROUTING_TABLE})..."
-setup_routing "$GLUETUN_PID"
+setup_routing "$GLUETUN_PID" "$GLUETUN_IP"
 
 echo ""
 echo "╔═══════════════════════════════════════════╗"
@@ -219,6 +223,7 @@ echo "║  NordVPN WiFi AP LIVE  [${COUNTRY}]"
 echo "║  SSID    : ${AP_SSID}"
 echo "║  Password: ${AP_PASSWORD}"
 echo "║  Gateway : ${AP_IP}"
+echo "║  AdGuard : ${GLUETUN_IP}"
 echo "║  RT      : ${ROUTING_TABLE}"
 echo "╚═══════════════════════════════════════════╝"
 
@@ -243,7 +248,18 @@ while true; do
         if [[ -n "$CURRENT_PID" ]]; then
             echo "==> ${TAG} VPN back up, reapplying routing..."
             GLUETUN_PID=$CURRENT_PID
-            setup_routing "$GLUETUN_PID"
+            NEW_GLUETUN_IP=$(nsenter -t "$GLUETUN_PID" -n -- ip addr show eth0 2>/dev/null \
+                | awk '/inet /{print $2}' | cut -d/ -f1)
+
+            if [[ "$NEW_GLUETUN_IP" != "$GLUETUN_IP" ]]; then
+                echo "==> ${TAG} Gluetun IP changed ($GLUETUN_IP -> $NEW_GLUETUN_IP), updating dnsmasq..."
+                GLUETUN_IP=$NEW_GLUETUN_IP
+                write_dnsmasq_conf "$GLUETUN_IP"
+                kill "$DNSMASQ_PID" 2>/dev/null || true
+                dnsmasq --conf-file=/tmp/dnsmasq-${COUNTRY}.conf --no-daemon &
+                DNSMASQ_PID=$!
+            fi
+            setup_routing "$GLUETUN_PID" "$GLUETUN_IP"
         fi
     fi
 done
