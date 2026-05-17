@@ -418,7 +418,7 @@ cmd_delete() {
     fi
 
     _purge_country "$country"
-    rm -rf "${COUNTRIES_DIR}/${country}"
+    rm -rf "${COUNTRIES_DIR}/${country}" 2>/dev/null || sudo rm -rf "${COUNTRIES_DIR}/${country}"
     print_success "Country profile '${country}' deleted."
 }
 
@@ -1365,7 +1365,7 @@ action_delete() {
     # _purge_country handles running containers, stopped containers, and the
     # wifi-ap image — no need to check is_country_running first
     _purge_country "${del_choice}"
-    rm -rf "${COUNTRIES_DIR}/${del_choice}"
+    rm -rf "${COUNTRIES_DIR}/${del_choice}" 2>/dev/null || sudo rm -rf "${COUNTRIES_DIR}/${del_choice}"
     print_success "Profile '${del_choice}' deleted."
 }
 
