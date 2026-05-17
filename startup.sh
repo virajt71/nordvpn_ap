@@ -199,13 +199,13 @@ cmd_create() {
     local default_country="${country^}"
 
     sed -i \
-        -e "s/^COUNTRY=.*/COUNTRY=${country}/" \
-        -e "s/^ROUTING_TABLE=.*/ROUTING_TABLE=${rt}/" \
-        -e "s/^AP_IP=.*/AP_IP=192.168.${octet}.1/" \
-        -e "s/^AP_SUBNET=.*/AP_SUBNET=192.168.${octet}.0\/24/" \
-        -e "s/^AP_SSID=.*/AP_SSID=ap_${country}/" \
-        -e "s/^SERVER_COUNTRIES=.*/SERVER_COUNTRIES=${SERVER_COUNTRIES:-${default_country}}/" \
-        -e "s/^SERVER_CITIES=.*/SERVER_CITIES=${SERVER_CITIES:-}/" \
+        -e "s/^COUNTRY=.*/COUNTRY=\"${country}\"/" \
+        -e "s/^ROUTING_TABLE=.*/ROUTING_TABLE=\"${rt}\"/" \
+        -e "s/^AP_IP=.*/AP_IP=\"192.168.${octet}.1\"/" \
+        -e "s/^AP_SUBNET=.*/AP_SUBNET=\"192.168.${octet}.0\/24\"/" \
+        -e "s/^AP_SSID=.*/AP_SSID=\"ap_${country}\"/" \
+        -e "s/^SERVER_COUNTRIES=.*/SERVER_COUNTRIES=\"${SERVER_COUNTRIES:-${default_country}}\"/" \
+        -e "s/^SERVER_CITIES=.*/SERVER_CITIES=\"${SERVER_CITIES:-}\"/" \
         "$ef"
     chmod 600 "$ef"
 
@@ -404,6 +404,10 @@ cmd_delete() {
     fi
 
     _purge_country "$country"
+    # Clean up root-owned files created by containers in bind mounts (like adguard-work)
+    if [[ -d "${COUNTRIES_DIR}/${country}" ]]; then
+        docker run --rm -v "${COUNTRIES_DIR}/${country}:/mnt/country" debian:bullseye-slim rm -rf /mnt/country/adguard-work /mnt/country/adguard-conf /mnt/country/gluetun-state 2>/dev/null || true
+    fi
     rm -rf "${COUNTRIES_DIR}/${country}"
     print_success "Country profile '${country}' deleted."
 }
@@ -1350,6 +1354,10 @@ action_delete() {
     # _purge_country handles running containers, stopped containers, and the
     # wifi-ap image — no need to check is_country_running first
     _purge_country "${del_choice}"
+    # Clean up root-owned files created by containers in bind mounts (like adguard-work)
+    if [[ -d "${COUNTRIES_DIR}/${del_choice}" ]]; then
+        docker run --rm -v "${COUNTRIES_DIR}/${del_choice}:/mnt/country" debian:bullseye-slim rm -rf /mnt/country/adguard-work /mnt/country/adguard-conf /mnt/country/gluetun-state 2>/dev/null || true
+    fi
     rm -rf "${COUNTRIES_DIR}/${del_choice}"
     print_success "Profile '${del_choice}' deleted."
 }
