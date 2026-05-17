@@ -133,6 +133,12 @@ setup_routing() {
     iptables -t nat -I PREROUTING 3 -i "$AP_IFACE" -p udp --dport 53 -d 103.86.99.100 -j DNAT --to-destination "$gip:53"
     iptables -t nat -I PREROUTING 4 -i "$AP_IFACE" -p tcp --dport 53 -d 103.86.99.100 -j DNAT --to-destination "$gip:53"
 
+    # Forward Web UI traffic to AdGuard Home
+    iptables -t nat -D PREROUTING -i "$AP_IFACE" -p tcp --dport 3000 -d "$AP_IP" -j DNAT --to-destination "$gip:3000" 2>/dev/null || true
+    iptables -t nat -D PREROUTING -i "$AP_IFACE" -p tcp --dport 80 -d "$AP_IP" -j DNAT --to-destination "$gip:80" 2>/dev/null || true
+    iptables -t nat -I PREROUTING 5 -i "$AP_IFACE" -p tcp --dport 3000 -d "$AP_IP" -j DNAT --to-destination "$gip:3000"
+    iptables -t nat -I PREROUTING 6 -i "$AP_IFACE" -p tcp --dport 80 -d "$AP_IP" -j DNAT --to-destination "$gip:80"
+
     nsenter -t "$gpid" -n -- bash -s <<EOF
 sysctl -qw net.ipv4.ip_forward=1
 ip route del ${AP_SUBNET} 2>/dev/null || true
@@ -157,6 +163,8 @@ cleanup() {
     iptables -t nat -D PREROUTING -i "$AP_IFACE" -p tcp --dport 53 -d 103.86.96.100 -j DNAT --to-destination "$gip:53" 2>/dev/null || true
     iptables -t nat -D PREROUTING -i "$AP_IFACE" -p udp --dport 53 -d 103.86.99.100 -j DNAT --to-destination "$gip:53" 2>/dev/null || true
     iptables -t nat -D PREROUTING -i "$AP_IFACE" -p tcp --dport 53 -d 103.86.99.100 -j DNAT --to-destination "$gip:53" 2>/dev/null || true
+    iptables -t nat -D PREROUTING -i "$AP_IFACE" -p tcp --dport 3000 -d "$AP_IP" -j DNAT --to-destination "$gip:3000" 2>/dev/null || true
+    iptables -t nat -D PREROUTING -i "$AP_IFACE" -p tcp --dport 80 -d "$AP_IP" -j DNAT --to-destination "$gip:80" 2>/dev/null || true
     ip addr flush dev "$AP_IFACE" 2>/dev/null || true
     ip link set "$AP_IFACE" down 2>/dev/null || true
     GPID=$(find_vpn_pid 2>/dev/null || true)
