@@ -17,8 +17,15 @@ ROUTING_TABLE="${ROUTING_TABLE:-100}"
 TAG="[wifi-ap/${COUNTRY}]"
 
 find_vpn_pid() {
-    for pid in /proc/[0-9]*/net/dev; do
-        grep -q "tun0" "$pid" 2>/dev/null && echo "${pid%%/net/*}" | tr -d '/proc/' && return 0
+    for pid_path in /proc/[0-9]*/mountinfo; do
+        if grep -q "country/${COUNTRY}/gluetun-state" "$pid_path" 2>/dev/null; then
+            local pid
+            pid="$(echo "$pid_path" | cut -d/ -f3)"
+            if grep -q "tun0" "/proc/${pid}/net/dev" 2>/dev/null; then
+                echo "$pid"
+                return 0
+            fi
+        fi
     done
     return 1
 }
