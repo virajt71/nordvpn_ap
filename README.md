@@ -8,6 +8,7 @@ A powerful, multi-profile Dockerized solution to turn your Linux machine into a 
 -   **Multi-Profile Support**: Run multiple hotspots simultaneously on different WiFi interfaces (e.g., one for US, one for UK).
 -   **NordLynx & OpenVPN**: Native support for high-performance NordLynx (WireGuard) or traditional OpenVPN.
 -   **Built-in Kill-Switch**: Powered by [Gluetun](https://github.com/qdm12/gluetun), ensuring no data leaks if the VPN connection drops.
+-   **DNS Ad-Blocking**: Integrated per-stack AdGuard Home intercepts DNS queries to block ads while tunneling requests securely through the VPN.
 -   **WiFi Security**: Supports WPA2-PSK, WPA3-SAE, and Mixed mode.
 -   **Auto-Audit**: Automatically probes WiFi hardware to select optimal Channel, Mode, and Width.
 -   **Health Monitoring**: Integrated health checks for VPN connectivity, public IP verification, and routing rules.
@@ -18,7 +19,7 @@ A powerful, multi-profile Dockerized solution to turn your Linux machine into a 
 ## 🏗 Architecture
 
 ### Single Profile Flow
-Each profile consists of two primary services: **Gluetun** (VPN) and **WiFi-AP** (Hotspot). Traffic is routed through dedicated policy routing tables on the host to ensure all connected clients are protected.
+Each profile consists of three primary services: **Gluetun** (VPN), **WiFi-AP** (Hotspot), and **AdGuard** (DNS Ad-Blocking). Traffic is routed through dedicated policy routing tables on the host to ensure all connected clients are protected, while DNS requests are silently intercepted and filtered.
 
 ```mermaid
 graph TD
@@ -29,6 +30,7 @@ graph TD
     subgraph "Docker Host (Linux)"
         subgraph "Country Profile (e.g., 'afghanistan')"
             AP["WiFi-AP Service<br/>(hostapd / dnsmasq)"]
+            AGH["AdGuard Home<br/>(DNS Filter)"]
             GT["Gluetun Service<br/>(NordVPN / Kill-switch)"]
         end
         
@@ -39,13 +41,16 @@ graph TD
 
     C -- Connects to SSID --> WIFI
     WIFI -- Managed by --> AP
+    AP -- "DNS Port 53 Intercept" --> AGH
     AP -- "Marks & Routes" --> RT
     RT -- "Forwards to" --> GT
+    AGH -- "Upstream Queries" --> GT
     GT -- "Encrypts & Tunnels" --> TUN
     TUN -- "NordVPN Exit Node" --> Internet((Internet))
 
     style GT fill:#4a90d9,stroke:#333,stroke-width:2px,color:#fff
     style AP fill:#00c896,stroke:#333,stroke-width:2px,color:#fff
+    style AGH fill:#ff5c5c,stroke:#333,stroke-width:2px,color:#fff
 ```
 
 ### Multi-Country Scalability
@@ -92,7 +97,14 @@ graph LR
 ```
 Follow the interactive prompts to create or edit country profiles.
 
-### 2. CLI Management
+### 2. Access the AdGuard Home Web UI
+Once connected to the AP (e.g., `ap_us`), open a browser and navigate to the gateway IP on port 3000:
+```
+http://192.168.60.1:3000
+```
+*(The exact IP depends on the AP_IP configured during the setup wizard for that profile).*
+
+### 3. CLI Management
 `startup.sh` also acts as a CLI for management tasks.
 
 | Command | Description |
