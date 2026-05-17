@@ -167,6 +167,7 @@ cleanup() {
     iptables -t nat -D PREROUTING -i "$AP_IFACE" -p tcp --dport 80 -d "$AP_IP" -j DNAT --to-destination "$gip:80" 2>/dev/null || true
     ip addr flush dev "$AP_IFACE" 2>/dev/null || true
     ip link set "$AP_IFACE" down 2>/dev/null || true
+    nsenter -t 1 -m -u -i -n -- nmcli dev set "$AP_IFACE" managed yes 2>/dev/null || true
     GPID=$(find_vpn_pid 2>/dev/null || true)
     if [[ -n "$GPID" ]]; then
         nsenter -t "$GPID" -n -- bash -c "
@@ -194,6 +195,9 @@ write_hostapd_conf
 write_dnsmasq_conf
 
 echo "==> ${TAG} Configuring $AP_IFACE..."
+# Tell host NetworkManager to ignore this interface to prevent conflicts (requires pid: host and privileged: true)
+nsenter -t 1 -m -u -i -n -- nmcli dev set "$AP_IFACE" managed no 2>/dev/null || true
+
 ip link set "$AP_IFACE" down 2>/dev/null || true
 ip addr flush dev "$AP_IFACE" 2>/dev/null || true
 ip addr add "$AP_IP/24" dev "$AP_IFACE"
