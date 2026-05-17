@@ -90,9 +90,7 @@ no-daemon
 dhcp-range=${dhcp_base}.10,${dhcp_base}.100,12h
 dhcp-option=3,${AP_IP}
 dhcp-option=6,103.86.96.100,103.86.99.100
-no-resolv
-server=103.86.96.100
-server=103.86.99.100
+port=0
 dhcp-leasefile=/tmp/dnsmasq-${COUNTRY}.leases
 EOF
 }
@@ -124,6 +122,17 @@ setup_routing() {
     iptables -I FORWARD 1 -i "$AP_IFACE" -o "$bridge" -j ACCEPT
     iptables -I FORWARD 2 -i "$bridge" -o "$AP_IFACE" -j ACCEPT
 
+    # Intercept DNS traffic destined for NordVPN DNS servers and redirect to local AdGuard Home instance in gluetun namespace
+    iptables -t nat -D PREROUTING -i "$AP_IFACE" -p udp --dport 53 -d 103.86.96.100 -j DNAT --to-destination "$gip:53" 2>/dev/null || true
+    iptables -t nat -D PREROUTING -i "$AP_IFACE" -p tcp --dport 53 -d 103.86.96.100 -j DNAT --to-destination "$gip:53" 2>/dev/null || true
+    iptables -t nat -D PREROUTING -i "$AP_IFACE" -p udp --dport 53 -d 103.86.99.100 -j DNAT --to-destination "$gip:53" 2>/dev/null || true
+    iptables -t nat -D PREROUTING -i "$AP_IFACE" -p tcp --dport 53 -d 103.86.99.100 -j DNAT --to-destination "$gip:53" 2>/dev/null || true
+
+    iptables -t nat -I PREROUTING 1 -i "$AP_IFACE" -p udp --dport 53 -d 103.86.96.100 -j DNAT --to-destination "$gip:53"
+    iptables -t nat -I PREROUTING 2 -i "$AP_IFACE" -p tcp --dport 53 -d 103.86.96.100 -j DNAT --to-destination "$gip:53"
+    iptables -t nat -I PREROUTING 3 -i "$AP_IFACE" -p udp --dport 53 -d 103.86.99.100 -j DNAT --to-destination "$gip:53"
+    iptables -t nat -I PREROUTING 4 -i "$AP_IFACE" -p tcp --dport 53 -d 103.86.99.100 -j DNAT --to-destination "$gip:53"
+
     nsenter -t "$gpid" -n -- bash -s <<EOF
 sysctl -qw net.ipv4.ip_forward=1
 ip route del ${AP_SUBNET} 2>/dev/null || true
@@ -144,6 +153,10 @@ cleanup() {
     pkill -f "dnsmasq --conf-file=/tmp/dnsmasq-${COUNTRY}.conf" 2>/dev/null || true
     ip rule del from "$AP_SUBNET" lookup $ROUTING_TABLE 2>/dev/null || true
     ip route flush table $ROUTING_TABLE 2>/dev/null || true
+    iptables -t nat -D PREROUTING -i "$AP_IFACE" -p udp --dport 53 -d 103.86.96.100 -j DNAT --to-destination "$gip:53" 2>/dev/null || true
+    iptables -t nat -D PREROUTING -i "$AP_IFACE" -p tcp --dport 53 -d 103.86.96.100 -j DNAT --to-destination "$gip:53" 2>/dev/null || true
+    iptables -t nat -D PREROUTING -i "$AP_IFACE" -p udp --dport 53 -d 103.86.99.100 -j DNAT --to-destination "$gip:53" 2>/dev/null || true
+    iptables -t nat -D PREROUTING -i "$AP_IFACE" -p tcp --dport 53 -d 103.86.99.100 -j DNAT --to-destination "$gip:53" 2>/dev/null || true
     ip addr flush dev "$AP_IFACE" 2>/dev/null || true
     ip link set "$AP_IFACE" down 2>/dev/null || true
     GPID=$(find_vpn_pid 2>/dev/null || true)

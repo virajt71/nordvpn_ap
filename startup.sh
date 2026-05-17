@@ -99,7 +99,7 @@ _purge_country() {
 
     # Belt-and-suspenders: remove by explicit name in case compose project
     # mapping is stale or containers were created outside compose
-    for cname in "gluetun-${country}" "wifi-ap-${country}"; do
+    for cname in "gluetun-${country}" "wifi-ap-${country}" "adguard-${country}"; do
         if docker inspect "$cname" &>/dev/null; then
             docker rm -f "$cname" 2>/dev/null && \
                 print_info "Removed container: ${cname}" || true
@@ -166,6 +166,12 @@ cmd_create() {
     fi
 
     mkdir -p "$dir/gluetun-state"
+    mkdir -p "$dir/adguard-work"
+    mkdir -p "$dir/adguard-conf"
+
+    if [[ -f "${ROOT_DIR}/access_point/AdGuardHome.yaml" ]]; then
+        cp "${ROOT_DIR}/access_point/AdGuardHome.yaml" "$dir/adguard-conf/"
+    fi
 
     # Auto-assign routing table — find next free ID starting at 100
     local used_tables=()
