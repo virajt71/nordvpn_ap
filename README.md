@@ -54,16 +54,16 @@ graph TD
 ```
 
 ### Multi-Country Scalability
-The architecture supports running multiple stacks concurrently by isolating each profile with its own physical interface, subnet, and routing table.
+The architecture supports running multiple stacks concurrently by isolating each profile with its own physical interface, subnet, and routing table. Each stack runs a fully isolated AdGuard Home instance.
 
 ```mermaid
 graph LR
     subgraph "Profile: US"
-        AP1[WiFi-AP] --> RT1[RT 100] --> GT1[Gluetun]
+        AP1[WiFi-AP] --> AGH1[AdGuard] --> RT1[RT 100] --> GT1[Gluetun]
     end
 
     subgraph "Profile: UK"
-        AP2[WiFi-AP] --> RT2[RT 101] --> GT2[Gluetun]
+        AP2[WiFi-AP] --> AGH2[AdGuard] --> RT2[RT 101] --> GT2[Gluetun]
     end
 
     W1[wlan0] -.-> AP1
@@ -74,9 +74,19 @@ graph LR
 
     classDef vpnStyle fill:#4a90d9,stroke:#333,stroke-width:2px,color:#fff;
     classDef apStyle fill:#00c896,stroke:#333,stroke-width:2px,color:#fff;
+    classDef aghStyle fill:#ff5c5c,stroke:#333,stroke-width:2px,color:#fff;
     class GT1,GT2 vpnStyle;
     class AP1,AP2 apStyle;
+    class AGH1,AGH2 aghStyle;
 ```
+
+---
+
+## 🛡️ DNS & Ad-Blocking
+This project integrates **AdGuard Home** directly into the VPN network namespace.
+- **Privacy First**: WiFi clients are instructed via DHCP to query NordVPN's official DNS servers (103.86.96.100, 103.86.99.100). These queries are silently intercepted via `iptables` and redirected to the local AdGuard Home instance.
+- **Secure Upstream**: AdGuard Home processes the queries, applies your custom blocklists, and forwards the allowed queries through the encrypted VPN tunnel to the official NordVPN servers.
+- **Persistent Config**: Your AdGuard Home configuration and data are saved permanently in `country/<name>/adguard-conf/` and `country/<name>/adguard-work/`.
 
 ---
 
