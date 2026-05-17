@@ -17,6 +17,7 @@ services:
       - SERVER_COUNTRIES=${SERVER_COUNTRIES}
       - SERVER_CITIES=${SERVER_CITIES}
       - FIREWALL_OUTBOUND_SUBNETS=${FIREWALL_OUTBOUND_SUBNETS}
+      - DNS_ADDRESS=127.0.0.1:5353
     sysctls:
       - net.ipv4.ip_forward=1
     healthcheck:
