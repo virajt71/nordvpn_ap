@@ -278,7 +278,10 @@ cmd_restart() {
     local country="${1:-}"
     [[ -z "$country" ]] && { print_error "Usage: restart <country>"; exit 1; }
     _assert_country "$country"
-    if compose_cmd "$country" restart; then
+
+    # Use stop/up instead of 'restart' to avoid network namespace race conditions
+    # when dependent containers use 'network_mode: service:...'
+    if compose_cmd "$country" stop && compose_cmd "$country" up -d; then
         print_success "Country profile '$country' restarted."
     else
         print_error "Failed to restart country profile '$country'."
