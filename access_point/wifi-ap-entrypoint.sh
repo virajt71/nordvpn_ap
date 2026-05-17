@@ -93,7 +93,6 @@ EOF
 }
 
 write_dnsmasq_conf() {
-    local gip=$1
     local dhcp_base
     dhcp_base="$(echo "$AP_IP" | awk -F. '{print $1"."$2"."$3}')"
     cat > /tmp/dnsmasq-${COUNTRY}.conf <<EOF
@@ -105,7 +104,7 @@ no-daemon
 port=0
 dhcp-range=${dhcp_base}.10,${dhcp_base}.100,12h
 dhcp-option=3,${AP_IP}
-dhcp-option=6,${gip}
+dhcp-option=6,${AP_IP}
 no-resolv
 dhcp-leasefile=/tmp/dnsmasq-${COUNTRY}.leases
 EOF
@@ -137,6 +136,14 @@ setup_routing() {
     iptables -I FORWARD 1 -i "$AP_IFACE" -o "$bridge" -j ACCEPT
     iptables -I FORWARD 2 -i "$bridge" -o "$AP_IFACE" -j ACCEPT
 
+    # AdGuard Port Forwarding (from AP_IP to Gluetun IP)
+    for port in 53 80 3000; do
+        iptables -t nat -D PREROUTING -d "$AP_IP" -p tcp --dport $port -j DNAT --to-destination "${gip}:${port}" 2>/dev/null || true
+        iptables -t nat -I PREROUTING 1 -d "$AP_IP" -p tcp --dport $port -j DNAT --to-destination "${gip}:${port}"
+    done
+    iptables -t nat -D PREROUTING -d "$AP_IP" -p udp --dport 53 -j DNAT --to-destination "${gip}:53" 2>/dev/null || true
+    iptables -t nat -I PREROUTING 1 -d "$AP_IP" -p udp --dport 53 -j DNAT --to-destination "${gip}:53"
+
     nsenter -t "$gpid" -n -- bash -s <<EOF
 sysctl -qw net.ipv4.ip_forward=1
 ip route del ${AP_SUBNET} 2>/dev/null || true
@@ -153,6 +160,10 @@ EOF
 
 cleanup() {
     echo "==> ${TAG} Shutting down..."
+    for port in 53 80 3000; do
+        iptables -t nat -D PREROUTING -d "$AP_IP" -p tcp --dport $port -j DNAT --to-destination "${GLUETUN_IP:-}:${port}" 2>/dev/null || true
+    done
+    iptables -t nat -D PREROUTING -d "$AP_IP" -p udp --dport 53 -j DNAT --to-destination "${GLUETUN_IP:-}:53" 2>/dev/null || true
     pkill -f "hostapd /tmp/hostapd-${COUNTRY}.conf" 2>/dev/null || true
     pkill -f "dnsmasq --conf-file=/tmp/dnsmasq-${COUNTRY}.conf" 2>/dev/null || true
     ip rule del from "$AP_SUBNET" lookup $ROUTING_TABLE 2>/dev/null || true
@@ -186,7 +197,7 @@ GLUETUN_IP=$(nsenter -t "$GLUETUN_PID" -n -- ip addr show eth0 2>/dev/null \
     | awk '/inet /{print $2}' | cut -d/ -f1)
 
 write_hostapd_conf
-write_dnsmasq_conf "$GLUETUN_IP"
+write_dnsmasq_conf
 
 echo "==> ${TAG} Configuring $AP_IFACE..."
 ip link set "$AP_IFACE" down 2>/dev/null || true
@@ -252,12 +263,8 @@ while true; do
                 | awk '/inet /{print $2}' | cut -d/ -f1)
 
             if [[ "$NEW_GLUETUN_IP" != "$GLUETUN_IP" ]]; then
-                echo "==> ${TAG} Gluetun IP changed ($GLUETUN_IP -> $NEW_GLUETUN_IP), updating dnsmasq..."
+                echo "==> ${TAG} Gluetun IP changed ($GLUETUN_IP -> $NEW_GLUETUN_IP), reapplying port forwarding..."
                 GLUETUN_IP=$NEW_GLUETUN_IP
-                write_dnsmasq_conf "$GLUETUN_IP"
-                kill "$DNSMASQ_PID" 2>/dev/null || true
-                dnsmasq --conf-file=/tmp/dnsmasq-${COUNTRY}.conf --no-daemon &
-                DNSMASQ_PID=$!
             fi
             setup_routing "$GLUETUN_PID" "$GLUETUN_IP"
         fi
