@@ -19,7 +19,7 @@ services:
       - FIREWALL_OUTBOUND_SUBNETS=${FIREWALL_OUTBOUND_SUBNETS}
       - DNS_SERVER=off
       - DNS_UPSTREAM_RESOLVER_TYPE=plain
-      - DNS_UPSTREAM_PLAIN_ADDRESSES=127.0.0.1
+      - DNS_UPSTREAM_PLAIN_ADDRESSES=127.0.0.1:53
     sysctls:
       - net.ipv4.ip_forward=1
     healthcheck:
