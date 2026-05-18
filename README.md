@@ -1,3 +1,5 @@
+> Note: The advance startup.sh script was created with AI assistance. Additionally, Google Jules (an Autonomous Coding Agent) is being tested to integrate Adguard Home per container and resolve some issues while setting up an isolated multi-container network.
+
 # NordVPN Dockerized Access Point (NordVPN-AP)
 
 A powerful, multi-profile Dockerized solution to turn your Linux machine into a NordVPN-protected WiFi Access Point. It features a sleek interactive wizard for setup and management, supporting both **NordLynx (WireGuard)** and **OpenVPN** protocols.
