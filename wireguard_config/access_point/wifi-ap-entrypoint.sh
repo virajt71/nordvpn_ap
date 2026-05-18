@@ -16,9 +16,13 @@ ROUTING_TABLE=100
 
 # Find a PID whose network namespace contains tun0
 find_vpn_pid() {
-    for pid in /proc/[0-9]*/net/dev; do
-        grep -q "tun0" "$pid" 2>/dev/null && echo "${pid%%/net/*}" | tr -d '/proc/' && return 0
-    done
+    local match
+    match=$(grep -l "tun0" /proc/[0-9]*/net/dev 2>/dev/null | head -n 1)
+    if [[ -n "$match" ]]; then
+        local pid_part="${match#/proc/}"
+        echo "${pid_part%%/*}"
+        return 0
+    fi
     return 1
 }
 
