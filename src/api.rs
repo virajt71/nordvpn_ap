@@ -3,8 +3,7 @@ use crate::docker::DockerManager;
 use crate::wifi;
 use axum::{
     extract::{Path, Query, State},
-    http::{Request, StatusCode},
-    middleware::Next,
+    http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -18,7 +17,7 @@ use std::sync::Arc;
 pub struct AppState {
     pub config_manager: Arc<ConfigManager>,
     pub docker_manager: Arc<DockerManager>,
-    pub api_token: String,
+    pub host_project_dir_defaulted: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -57,7 +56,6 @@ pub struct UpdateCredentialsInput {
     pub openvpn_user: Option<String>,
     pub openvpn_password: Option<String>,
     pub wireguard_private_key: Option<String>,
-    pub api_token: Option<String>,
 }
 
 pub fn create_router(state: AppState) -> Router {
@@ -74,40 +72,11 @@ pub fn create_router(state: AppState) -> Router {
         // Utils routes
         .route("/wifi/interfaces", get(list_wifi_interfaces))
         .route("/vpn/locations", get(list_vpn_locations))
-        .route("/health", get(get_health))
-        .layer(axum::middleware::from_fn_with_state(
-            state.clone(),
-            auth_middleware,
-        ));
+        .route("/health", get(get_health));
 
     Router::new()
         .nest("/api", api_routes)
         .with_state(state)
-}
-
-async fn auth_middleware(
-    State(state): State<AppState>,
-    req: Request<axum::body::Body>,
-    next: Next,
-) -> Result<impl IntoResponse, impl IntoResponse> {
-    let auth_header = req
-        .headers()
-        .get(axum::http::header::AUTHORIZATION)
-        .and_then(|h| h.to_str().ok());
-
-    if let Some(auth_val) = auth_header {
-        if auth_val.starts_with("Bearer ") {
-            let token = auth_val.trim_start_matches("Bearer ");
-            if token == state.api_token {
-                return Ok(next.run(req).await);
-            }
-        }
-    }
-
-    Err((
-        StatusCode::UNAUTHORIZED,
-        Json(json!({ "error": "Unauthorized: Invalid or missing Bearer token" })),
-    ))
 }
 
 // ─── Stack Handlers ──────────────────────────────────────────────────────────
@@ -396,6 +365,14 @@ async fn delete_stack(Path(id): Path<String>, State(state): State<AppState>) -> 
 // ─── Stack Actions ───────────────────────────────────────────────────────────
 
 async fn start_stack(Path(id): Path<String>, State(state): State<AppState>) -> impl IntoResponse {
+    // Regenerate compose config on start to pick up template or credential updates
+    if let Ok(stacks) = state.config_manager.load_stacks() {
+        if let Some(s) = stacks.into_iter().find(|x| x.id == id) {
+            let creds = state.config_manager.load_credentials();
+            let _ = state.docker_manager.generate_compose_file(&s, &creds);
+        }
+    }
+
     match state.docker_manager.start_stack(&id) {
         Ok(out) => Json(json!({ "success": true, "output": out })).into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response(),
@@ -445,7 +422,6 @@ async fn get_credentials(State(state): State<AppState>) -> impl IntoResponse {
     let creds = state.config_manager.load_credentials();
     // Do not return password/key values directly for security, just let user know if they exist
     Json(json!({
-        "api_token": creds.api_token,
         "has_openvpn_user": creds.openvpn_user.is_some() && !creds.openvpn_user.as_ref().unwrap().is_empty(),
         "has_openvpn_password": creds.openvpn_password.is_some() && !creds.openvpn_password.as_ref().unwrap().is_empty(),
         "has_wireguard_private_key": creds.wireguard_private_key.is_some() && !creds.wireguard_private_key.as_ref().unwrap().is_empty(),
@@ -461,7 +437,6 @@ async fn update_credentials(
     if let Some(user) = input.openvpn_user { creds.openvpn_user = Some(user); }
     if let Some(pass) = input.openvpn_password { creds.openvpn_password = Some(pass); }
     if let Some(key) = input.wireguard_private_key { creds.wireguard_private_key = Some(key); }
-    if let Some(token) = input.api_token { creds.api_token = token; }
 
     if let Err(e) = state.config_manager.save_credentials(&creds) {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response();
@@ -505,12 +480,13 @@ async fn list_vpn_locations() -> impl IntoResponse {
     Json(fallback).into_response()
 }
 
-async fn get_health() -> impl IntoResponse {
+async fn get_health(State(state): State<AppState>) -> impl IntoResponse {
     let docker_output = Command::new("docker").arg("ps").output();
     let docker_ok = docker_output.is_ok() && docker_output.unwrap().status.success();
 
     Json(json!({
         "status": "healthy",
-        "docker_socket_reachable": docker_ok
+        "docker_socket_reachable": docker_ok,
+        "host_project_dir_defaulted": state.host_project_dir_defaulted
     }))
 }

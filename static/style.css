@@ -874,3 +874,25 @@ small {
     font-size: 32px;
     color: var(--color-primary);
 }
+
+/* Alert Warning Banner */
+.alert-banner {
+    background: rgba(255, 179, 0, 0.1);
+    border: 1px solid var(--color-warning);
+    border-radius: 8px;
+    padding: 14px 20px;
+    color: var(--color-warning);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 24px;
+    font-size: 14px;
+    line-height: 1.5;
+}
+.alert-banner code {
+    background: rgba(0, 0, 0, 0.2);
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-family: monospace;
+    font-weight: bold;
+}

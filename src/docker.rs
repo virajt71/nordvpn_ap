@@ -100,7 +100,7 @@ impl DockerManager {
 
   wifi-ap:
     build:
-      context: {host_project_dir}
+      context: ../..
       dockerfile: access_point/Dockerfile.wifi-ap
     image: wifi-ap-image-{id}
     container_name: wifi-ap-{id}
@@ -132,7 +132,6 @@ impl DockerManager {
             wg_key = wg_key,
             vpn_city = stack.vpn_city,
             firewall_outbound_subnets = firewall_outbound_subnets,
-            host_project_dir = self.host_project_dir,
             ap_iface = stack.ap_iface,
             ssid = stack.ssid,
             password = stack.password,
@@ -163,13 +162,18 @@ impl DockerManager {
             .output()
             .map_err(|e| format!("Failed to run docker compose: {}", e))?;
 
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
         if !output.status.success() {
-            let err = String::from_utf8_lossy(&output.stderr).into_owned();
-            error!("Docker compose up failed for stack {}: {}", id, err);
-            return Err(err);
+            error!(
+                "Docker compose up failed for stack {}:\nSTDOUT:\n{}\nSTDERR:\n{}",
+                id, stdout, stderr
+            );
+            return Err(format!("Docker Compose up failed: {}", stderr));
         }
 
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        Ok(stdout)
     }
 
     pub fn stop_stack(&self, id: &str) -> Result<String, String> {
@@ -184,13 +188,18 @@ impl DockerManager {
             .output()
             .map_err(|e| format!("Failed to run docker compose stop: {}", e))?;
 
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
         if !output.status.success() {
-            let err = String::from_utf8_lossy(&output.stderr).into_owned();
-            error!("Docker compose stop failed for stack {}: {}", id, err);
-            return Err(err);
+            error!(
+                "Docker compose stop failed for stack {}:\nSTDOUT:\n{}\nSTDERR:\n{}",
+                id, stdout, stderr
+            );
+            return Err(format!("Docker Compose stop failed: {}", stderr));
         }
 
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        Ok(stdout)
     }
 
     pub fn destroy_stack(&self, id: &str) -> Result<(), String> {
@@ -242,12 +251,18 @@ impl DockerManager {
             .output()
             .map_err(|e| format!("Failed to run docker compose restart: {}", e))?;
 
+        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+
         if !output.status.success() {
-            let err = String::from_utf8_lossy(&output.stderr).into_owned();
-            return Err(err);
+            error!(
+                "Docker compose restart failed for stack {}:\nSTDOUT:\n{}\nSTDERR:\n{}",
+                id, stdout, stderr
+            );
+            return Err(format!("Docker Compose restart failed: {}", stderr));
         }
 
-        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+        Ok(stdout)
     }
 
     pub fn inspect_container_status(&self, container_name: &str) -> Option<String> {

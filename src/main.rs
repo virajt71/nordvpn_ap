@@ -39,12 +39,14 @@ async fn main() {
     info!("Project Root detected: {:?}", project_root);
 
     // Get HOST_PROJECT_DIR environment variable
+    let mut host_project_dir_defaulted = false;
     let host_project_dir = match env::var("HOST_PROJECT_DIR") {
         Ok(dir) => {
             info!("HOST_PROJECT_DIR set to: {}", dir);
             dir
         }
         Err(_) => {
+            host_project_dir_defaulted = true;
             let pwd = project_root.to_string_lossy().to_string();
             warn!(
                 "HOST_PROJECT_DIR not set. Defaulting to current project root: {}",
@@ -58,15 +60,14 @@ async fn main() {
     let config_manager = Arc::new(ConfigManager::new(&project_root));
     let docker_manager = Arc::new(DockerManager::new(&project_root, &host_project_dir));
 
-    // Load credentials & API token
-    let creds = config_manager.load_credentials();
-    info!("API Bearer Token loaded: {}", creds.api_token);
+    // Load credentials
+    let _creds = config_manager.load_credentials();
 
     // Setup state
     let state = api::AppState {
         config_manager,
         docker_manager,
-        api_token: creds.api_token.clone(),
+        host_project_dir_defaulted,
     };
 
     // CORS configuration
@@ -84,6 +85,7 @@ async fn main() {
     // Create routes
     let app = api::create_router(state)
         .layer(cors)
+        .layer(tower_http::trace::TraceLayer::new_for_http())
         .nest_service("/static", ServeDir::new(&static_dir))
         .fallback_service(ServeFile::new(fallback_file));
 

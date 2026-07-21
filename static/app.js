@@ -1,6 +1,3 @@
-// Global API Token State
-let API_TOKEN = localStorage.getItem('api_token') || 'default-token';
-
 // App state
 let stacks = [];
 let interfaces = [];
@@ -50,7 +47,6 @@ function showToast(message, type = 'info') {
 async function apiRequest(endpoint, options = {}) {
     const headers = {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${API_TOKEN}`,
         ...options.headers
     };
 
@@ -62,11 +58,6 @@ async function apiRequest(endpoint, options = {}) {
     try {
         const response = await fetch(endpoint, config);
         
-        if (response.status === 401) {
-            showAuthOverlay();
-            return null;
-        }
-
         if (!response.ok) {
             const errData = await response.json().catch(() => ({}));
             throw new Error(errData.error || `HTTP error! Status: ${response.status}`);
@@ -125,6 +116,16 @@ async function checkSystemHealth() {
             const apiDot = document.getElementById('api-status-dot');
             apiDot.className = 'pulse-dot green';
             document.getElementById('api-status-text').innerText = 'Orchestrator Online';
+            
+            // Toggle path configuration warning banner
+            const warningBanner = document.getElementById('env-warning-banner');
+            if (warningBanner) {
+                if (res.host_project_dir_defaulted) {
+                    warningBanner.style.display = 'flex';
+                } else {
+                    warningBanner.style.display = 'none';
+                }
+            }
         }
     } catch {
         const apiDot = document.getElementById('api-status-dot');
@@ -388,10 +389,6 @@ async function loadCredentialsForm() {
         document.getElementById('cred-wg-key').placeholder = res.has_wireguard_private_key ? '•••••••••••••••• (WireGuard key is configured)' : 'Enter WireGuard Private Key';
         document.getElementById('cred-ovpn-user').placeholder = res.has_openvpn_user ? '•••••••• (Username is configured)' : 'Enter Username';
         document.getElementById('cred-ovpn-pass').placeholder = res.has_openvpn_password ? '•••••••• (Password is configured)' : 'Enter Password';
-        document.getElementById('cred-api-token').value = res.api_token || API_TOKEN;
-        
-        // Show token preview
-        document.getElementById('bearer-token-preview').innerText = res.api_token || '••••••••';
     } catch {}
 }
 
@@ -401,13 +398,11 @@ document.getElementById('form-credentials').addEventListener('submit', async (e)
     const wg_key = document.getElementById('cred-wg-key').value.trim();
     const ovpn_user = document.getElementById('cred-ovpn-user').value.trim();
     const ovpn_pass = document.getElementById('cred-ovpn-pass').value.trim();
-    const api_token = document.getElementById('cred-api-token').value.trim();
 
     const payload = {};
     if (wg_key) payload.wireguard_private_key = wg_key;
     if (ovpn_user) payload.openvpn_user = ovpn_user;
     if (ovpn_pass) payload.openvpn_password = ovpn_pass;
-    if (api_token) payload.api_token = api_token;
 
     showToast('Saving credentials...');
     try {
@@ -415,23 +410,10 @@ document.getElementById('form-credentials').addEventListener('submit', async (e)
             method: 'PATCH',
             body: JSON.stringify(payload)
         });
-        
-        if (api_token) {
-            API_TOKEN = api_token;
-            localStorage.setItem('api_token', api_token);
-        }
 
         showToast('Credentials updated successfully.', 'success');
         loadCredentialsForm();
     } catch {}
-});
-
-document.getElementById('btn-copy-token').addEventListener('click', () => {
-    navigator.clipboard.writeText(API_TOKEN).then(() => {
-        showToast('Bearer token copied to clipboard!', 'success');
-    }).catch(() => {
-        showToast('Failed to copy token. Copy manually.', 'error');
-    });
 });
 
 // ─── Create AP Modal Handlers ────────────────────────────────────────────────
@@ -522,7 +504,6 @@ document.getElementById('form-stack').addEventListener('submit', async (e) => {
 
 // Initialize dashboard health checks & timers
 let healthInterval = null;
-let isAuthOverlayOpen = false;
 
 function startHealthCheck() {
     checkSystemHealth();
@@ -537,43 +518,6 @@ function stopHealthCheck() {
         healthInterval = null;
     }
 }
-
-function showAuthOverlay() {
-    if (isAuthOverlayOpen) return;
-    isAuthOverlayOpen = true;
-    
-    stopHealthCheck();
-    if (logsInterval) {
-        clearInterval(logsInterval);
-        logsInterval = null;
-    }
-    
-    const authModal = document.getElementById('modal-auth');
-    if (authModal) {
-        authModal.style.display = 'flex';
-        authModal.classList.add('open');
-    }
-}
-
-document.getElementById('btn-submit-auth').addEventListener('click', () => {
-    const tokenInput = document.getElementById('auth-token-input').value.trim();
-    if (!tokenInput) {
-        showToast('Please enter a valid token.', 'error');
-        return;
-    }
-    API_TOKEN = tokenInput;
-    localStorage.setItem('api_token', tokenInput);
-    
-    const authModal = document.getElementById('modal-auth');
-    if (authModal) {
-        authModal.style.display = 'none';
-        authModal.classList.remove('open');
-    }
-    isAuthOverlayOpen = false;
-    
-    startHealthCheck();
-    switchView('dashboard');
-});
 
 // Start application
 startHealthCheck();

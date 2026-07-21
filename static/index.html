@@ -40,15 +40,6 @@
                     <span class="pulse-dot green" id="api-status-dot"></span>
                     <span class="status-label" id="api-status-text">Connecting...</span>
                 </div>
-                <div class="token-container">
-                    <span class="token-title">API Bearer Token</span>
-                    <div class="token-box">
-                        <span class="token-value" id="bearer-token-preview">••••••••••••••••</span>
-                        <button class="btn-copy-token" id="btn-copy-token" title="Copy Token">
-                            <i class="fa-regular fa-copy"></i>
-                        </button>
-                    </div>
-                </div>
             </div>
         </aside>
 
@@ -69,6 +60,14 @@
 
             <!-- Dashboard View -->
             <section class="view-section active" id="view-dashboard">
+                <!-- Warning Alert Banner -->
+                <div class="alert-banner" id="env-warning-banner" style="display: none;">
+                    <i class="fa-solid fa-triangle-exclamation" style="font-size: 20px;"></i>
+                    <div>
+                        <strong>Configuration Warning:</strong> <code>HOST_PROJECT_DIR</code> is not set on the host. Sibling AP stacks will fail to build or mount volume paths correctly. Set it on the host and restart the orchestrator.
+                    </div>
+                </div>
+
                 <div class="stacks-grid" id="stacks-container">
                     <!-- Stack cards dynamically populated here -->
                     <div class="loading-state">
@@ -105,12 +104,7 @@
                             </div>
                         </div>
                         <small class="row-help">Required if using OpenVPN protocol. Get these credentials from your NordVPN dashboard.</small>
-                        <div class="form-group margin-top">
-                            <label for="cred-api-token">API Authorization Token</label>
-                            <input type="text" id="cred-api-token" placeholder="Bearer Token for secure access">
-                            <small>Changing this token requires updating your HTTP clients (and re-saving it in your browser storage).</small>
-                        </div>
-                        <div class="form-actions">
+                        <div class="form-actions" style="margin-top: 20px;">
                             <button type="submit" class="btn btn-primary" id="btn-save-credentials">
                                 <i class="fa-solid fa-floppy-disk"></i> Save Credentials
                             </button>
@@ -262,27 +256,7 @@
         </div>
     </div>
 
-    <!-- Auth Overlay Modal -->
-    <div class="modal" id="modal-auth" style="display: none;">
-        <div class="modal-content glass-panel animated zoomIn" style="max-width: 420px; text-align: center; padding: 30px;">
-            <i class="fa-solid fa-lock" style="font-size: 40px; color: var(--color-primary); margin-bottom: 20px;"></i>
-            <h3 style="margin-bottom: 10px;">Bearer Token Required</h3>
-            <p style="font-size: 14px; color: var(--color-text-muted); margin-bottom: 20px; line-height: 1.5;">
-                This orchestrator is secured. Enter the API Bearer Token to access the dashboard.
-            </p>
-            <div class="form-group" style="margin-bottom: 20px; text-align: left;">
-                <label for="auth-token-input">API Bearer Token</label>
-                <input type="password" id="auth-token-input" placeholder="Paste your token here..." required style="width: 100%;">
-            </div>
-            <button class="btn btn-primary" id="btn-submit-auth" style="width: 100%; justify-content: center;">
-                <i class="fa-solid fa-key"></i> Authenticate
-            </button>
-            <p style="font-size: 12px; color: var(--color-text-muted); margin-top: 20px; line-height: 1.4;">
-                Tip: You can find the generated token in the orchestrator container boot logs:<br>
-                <code style="background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 4px; display: inline-block; margin-top: 5px; font-family: monospace; font-size: 11px;">docker logs ap-manager</code>
-            </p>
-        </div>
-    </div>
+
 
     <!-- Global Notification Banner -->
     <div class="notification-container" id="notification-container"></div>

@@ -22,7 +22,6 @@ pub struct Stack {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Credentials {
-    pub api_token: String,
     pub openvpn_user: Option<String>,
     pub openvpn_password: Option<String>,
     pub wireguard_private_key: Option<String>,
@@ -84,7 +83,7 @@ impl ConfigManager {
             }
         }
 
-        let mut creds = match loaded {
+        let creds = match loaded {
             Some(c) => c,
             None => {
                 // Fallback to reading from .env.credentials at project root
@@ -111,10 +110,7 @@ impl ConfigManager {
                     }
                 }
 
-                // Generate a default bearer token if one doesn't exist
-                let api_token = uuid::Uuid::new_v4().to_string();
                 Credentials {
-                    api_token,
                     openvpn_user,
                     openvpn_password,
                     wireguard_private_key,
@@ -122,19 +118,8 @@ impl ConfigManager {
             }
         };
 
-        // Environment variable override (highest priority)
-        if let Ok(env_token) = std::env::var("API_TOKEN") {
-            let env_token = env_token.trim();
-            if !env_token.is_empty() && creds.api_token != env_token {
-                info!("Overriding API token from environment variable");
-                creds.api_token = env_token.to_string();
-                let _ = self.save_credentials(&creds);
-            }
-        } else {
-            // Save if it was newly generated
-            if !path.exists() {
-                let _ = self.save_credentials(&creds);
-            }
+        if !path.exists() {
+            let _ = self.save_credentials(&creds);
         }
 
         creds
