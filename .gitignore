@@ -11,3 +11,9 @@ country/*
 
 # MacOS/System
 .DS_Store
+
+# Rust build output
+/target
+
+# API state & credentials persistence
+/data

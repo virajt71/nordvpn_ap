@@ -1,0 +1,15 @@
+services:
+  ap-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ap-manager
+    network_mode: host
+    privileged: true
+    restart: unless-stopped
+    environment:
+      - HOST_PROJECT_DIR=${HOST_PROJECT_DIR}
+      - API_PORT=8080
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/app

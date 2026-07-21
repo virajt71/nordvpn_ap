@@ -1,20 +1,20 @@
-> Note: The advance startup.sh script was created with AI assistance. Additionally, Google Jules (an Autonomous Coding Agent) is being tested to integrate Adguard Home per container and resolve some issues while setting up an isolated multi-container network.
-
 # NordVPN Dockerized Access Point (NordVPN-AP)
 
-A powerful, multi-profile Dockerized solution to turn your Linux machine into a NordVPN-protected WiFi Access Point. It features a sleek interactive wizard for setup and management, supporting both **NordLynx (WireGuard)** and **OpenVPN** protocols.
+A powerful, multi-profile Dockerized solution to turn your Linux machine into a NordVPN-protected WiFi Access Point. This project features a sleek, networked **Rust API Orchestrator & Web Dashboard** for managing and monitoring your access point stacks remotely, supporting both **NordLynx (WireGuard)** and **OpenVPN** protocols.
+
+---
 
 ## 🚀 Features
 
--   **Interactive Wizard & CLI**: A single entry point (`startup.sh`) for both interactive setup and scriptable management.
+-   **Rust API Orchestrator**: A lightweight Axum backend that programmatically manages access point stacks via Docker.
+-   **Web Dashboard UI**: A premium, responsive dark-mode dashboard (HTML/CSS/JS with glassmorphism aesthetics) served directly by the orchestrator.
 -   **Multi-Profile Support**: Run multiple hotspots simultaneously on different WiFi interfaces (e.g., one for US, one for UK).
--   **NordLynx & OpenVPN**: Native support for high-performance NordLynx (WireGuard) or traditional OpenVPN.
 -   **Built-in Kill-Switch**: Powered by [Gluetun](https://github.com/qdm12/gluetun), ensuring no data leaks if the VPN connection drops.
 -   **DNS Ad-Blocking**: Integrated per-stack AdGuard Home intercepts DNS queries to block ads while tunneling requests securely through the VPN.
 -   **WiFi Security**: Supports WPA2-PSK, WPA3-SAE, and Mixed mode.
--   **Auto-Audit**: Automatically probes WiFi hardware to select optimal Channel, Mode, and Width.
--   **Health Monitoring**: Integrated health checks for VPN connectivity, public IP verification, and routing rules.
--   **Conflict Detection**: Automatically prevents IP, Subnet, and Interface conflicts between multiple country profiles.
+-   **Auto-Auditing**: Automatically probes WiFi hardware to suggest optimal channels, modes, and channel widths.
+-   **Bearer Token Security**: Access to the API and web dashboard is secured using a customizable Bearer Token authorization scheme.
+-   **Conflict Prevention**: Automatically allocates non-overlapping subnets (starting at `192.168.60.0/24`) and routing tables (starting at `100`) to prevent collisions between profiles.
 
 ---
 
@@ -84,83 +84,80 @@ graph LR
 
 ---
 
-## 🛡️ DNS & Ad-Blocking
-This project integrates **AdGuard Home** directly into the VPN network namespace.
-- **Privacy First**: WiFi clients are instructed via DHCP to query NordVPN's official DNS servers (103.86.96.100, 103.86.99.100). These queries are silently intercepted via `iptables` and redirected to the local AdGuard Home instance.
-- **Secure Upstream**: AdGuard Home processes the queries, applies your custom blocklists, and forwards the allowed queries through the encrypted VPN tunnel to the official NordVPN servers.
-- **Persistent Config**: Your AdGuard Home configuration and data are saved permanently in `country/<name>/adguard-conf/` and `country/<name>/adguard-work/`.
+## 🚦 Getting Started (Rust Web Orchestrator)
 
----
+The Rust Orchestrator is the recommended way to deploy and manage your Access Points. It runs as a Docker container with host privilege capability and controls the other stacks via the Docker socket.
 
-## 🛠 Prerequisites
+### 1. Setup VPN Credentials
+Create a `.env.credentials` file in the project root directory containing your NordVPN service credentials:
+```env
+OPENVPN_USER="your-nordvpn-service-username"
+OPENVPN_PASSWORD="your-nordvpn-service-password"
+WIREGUARD_PRIVATE_KEY="your-wireguard-private-key"
+```
 
--   **OS**: Linux (tested on Ubuntu/Debian/Garuda).
--   **Docker & Docker Compose**: Installed and running.
--   **Hardware**: A WiFi network card that supports **AP (Access Point) mode**.
--   **Tools**: `curl`, `jq`, `iw`, and `fzf` (required for wizard).
-
----
-
-## 🚦 Usage
-
-### 1. Launch the Setup Wizard
+### 2. Launch the Orchestrator
+Export the project directory on your host and run `docker compose` to start the orchestrator:
 ```bash
-./startup.sh
+export HOST_PROJECT_DIR=$(pwd)
+docker compose up -d --build
 ```
-Follow the interactive prompts to create or edit country profiles.
 
-### 2. Access the AdGuard Home Web UI
-Once connected to the AP (e.g., `ap_us`), open a browser and navigate to the gateway IP on port 3000:
-```
-http://192.168.60.1:3000
-```
-*(The exact IP depends on the AP_IP configured during the setup wizard for that profile).*
+### 3. Open the Dashboard
+Navigate your browser to `http://localhost:8080/`.
+- The dashboard automatically detects and lists your WiFi interfaces and audits their capabilities.
+- You can create, edit, start, stop, restart, delete, and view logs of all access point profiles directly from the Web UI.
+- On first run, a secure API Bearer Token is generated (displayed in the sidebar). Copy it to authenticate your API client or UI session if required.
 
-### 3. CLI Management
-`startup.sh` also acts as a CLI for management tasks.
+---
 
-| Command | Description |
-| :--- | :--- |
-| `./startup.sh list` | List all profiles and their current status. |
-| `./startup.sh start <name>` | Build and start a specific country profile. |
-| `./startup.sh stop <name>` | Stop a profile (keeps containers). |
-| `./startup.sh health` | Check VPN connectivity and routing for all profiles. |
-| `./startup.sh logs <name>` | Follow logs for a specific profile. |
-| `./startup.sh delete <name>` | Completely remove a profile and its config. |
+## 🔌 API Endpoints Reference
+
+The `ap-manager` exposes a REST API for remote management:
+
+| Method | Endpoint | Description |
+| :--- | :--- | :--- |
+| `GET` | `/api/stacks` | List all AP profiles, active status, and VPN IPs |
+| `POST` | `/api/stacks` | Create a new AP stack (auto-allocates subnet/routing table) |
+| `GET` | `/api/stacks/:id` | Get detailed status of a specific AP stack |
+| `PATCH` | `/api/stacks/:id` | Update an existing stack configuration |
+| `DELETE` | `/api/stacks/:id` | Remove a stack and tear down its containers |
+| `POST` | `/api/stacks/:id/start` | Start containers for a specific stack |
+| `POST` | `/api/stacks/:id/stop` | Stop containers for a specific stack |
+| `POST` | `/api/stacks/:id/restart` | Restart containers for a specific stack |
+| `GET` | `/api/stacks/:id/logs` | Query container logs for Gluetun, WiFi-AP, and AdGuard |
+| `GET` | `/api/credentials` | Query configured credentials configuration presence |
+| `PATCH` | `/api/credentials` | Update OpenVPN, WireGuard, or API Bearer Token credentials |
+| `GET` | `/api/wifi/interfaces` | List host WiFi interfaces and audited capabilities |
+| `GET` | `/api/vpn/locations` | Query available NordVPN exit node locations |
+| `GET` | `/api/health` | Get health check status of the orchestrator and Docker daemon |
+
+*Note: All API requests require the header `Authorization: Bearer <API_TOKEN>`.*
 
 ---
 
 ## 📂 Project Structure
 
--   `startup.sh`: Unified interactive wizard and CLI management tool.
--   `country/`: Contains per-profile configurations (e.g., `country/afghanistan/.env`).
--   `access_point/`: Docker build context for the WiFi Access Point service.
--   `docker-compose.template.yaml`: Template used to generate instance stacks.
--   `.env.credentials`: Secure storage for your NordVPN keys/passwords.
+-   `src/`: The Rust orchestrator backend source code.
+-   `static/`: The frontend web dashboard assets (HTML, CSS, JS).
+-   `access_point/`: Docker build context for the physical WiFi Access Point container (`hostapd`/`dnsmasq`).
+-   `country/`: Contains per-profile runtime state generated by the orchestrator (e.g., `country/us_ap/`).
+-   `legacy/`: Contains legacy scripts and templates (`startup.sh`, `docker-compose.template.yaml`, etc.).
 
 ---
 
-## 🔧 Configuration
+## 🛠 Prerequisites
 
-Each profile has its own `.env` file located in `country/<name>/.env`. Key variables include:
-
--   `COUNTRY`: Profile identifier.
--   `VPN_TYPE`: `wireguard` or `openvpn`.
--   `SERVER_COUNTRIES`: Target country for the VPN connection.
--   `AP_IFACE`: The WiFi interface to use.
--   `AP_SSID` / `AP_PASSWORD`: WiFi credentials.
--   `ROUTING_TABLE`: Unique ID for the policy routing table (auto-assigned).
+-   **OS**: Linux (with a kernel that supports hostapd/policy routing).
+-   **Docker & Docker Compose**: Installed and running.
+-   **Hardware**: A WiFi network card that supports **AP (Access Point) mode**. Run `iw list` and look for `AP` in "Supported interface modes".
 
 ---
 
-## 🚑 Troubleshooting
+## 🔧 Legacy CLI Wizard Usage
 
--   **WiFi Interface Errors**: Ensure your card supports AP mode. Run `iw list` and look for `AP` in "Supported interface modes".
--   **VPN Connection Issues**: Run `./startup.sh health` to check if `tun0` is up and if the public IP is correctly masked.
--   **Logs**: Use `./startup.sh logs <name>` to see detailed output.
-
----
-
-## 🔒 Security Note
-
-This project stores credentials in `.env.credentials` and per-profile `.env` files with `600` permissions. Ensure your host system is secure and do not commit your `.env` files to public repositories.
+If you prefer terminal-only operation, you can still run the legacy setup script:
+```bash
+./startup.sh
+```
+Follow the interactive prompts to create, edit, or launch country profiles from your terminal shell. Refer to `startup.sh usage` by running `./startup.sh --help`.

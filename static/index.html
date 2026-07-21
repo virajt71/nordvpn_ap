@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>NordVPN AP Manager</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome for Premium Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Custom Style Sheet -->
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar / Navigation -->
+        <aside class="sidebar">
+            <div class="brand">
+                <i class="fa-solid fa-circle-nodes brand-icon"></i>
+                <div class="brand-text">
+                    <h1>NordAP</h1>
+                    <span>Orchestrator v1.0</span>
+                </div>
+            </div>
+            <nav class="nav-menu">
+                <button class="nav-item active" id="btn-nav-dashboard">
+                    <i class="fa-solid fa-chart-pie"></i> Dashboard
+                </button>
+                <button class="nav-item" id="btn-nav-credentials">
+                    <i class="fa-solid fa-key"></i> Credentials
+                </button>
+                <button class="nav-item" id="btn-nav-interfaces">
+                    <i class="fa-solid fa-wifi"></i> WiFi interfaces
+                </button>
+            </nav>
+            <div class="system-status">
+                <div class="status-indicator">
+                    <span class="pulse-dot green" id="api-status-dot"></span>
+                    <span class="status-label" id="api-status-text">Connecting...</span>
+                </div>
+                <div class="token-container">
+                    <span class="token-title">API Bearer Token</span>
+                    <div class="token-box">
+                        <span class="token-value" id="bearer-token-preview">••••••••••••••••</span>
+                        <button class="btn-copy-token" id="btn-copy-token" title="Copy Token">
+                            <i class="fa-regular fa-copy"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Workspace -->
+        <main class="main-content">
+            <!-- Top Header Bar -->
+            <header class="top-header">
+                <div class="header-title">
+                    <h2 id="page-title">Access Point Dashboard</h2>
+                    <p class="subtitle" id="page-subtitle">Monitor and control your VPN network gateways</p>
+                </div>
+                <div class="header-actions">
+                    <button class="btn btn-primary" id="btn-create-ap">
+                        <i class="fa-solid fa-plus"></i> Create Access Point
+                    </button>
+                </div>
+            </header>
+
+            <!-- Dashboard View -->
+            <section class="view-section active" id="view-dashboard">
+                <div class="stacks-grid" id="stacks-container">
+                    <!-- Stack cards dynamically populated here -->
+                    <div class="loading-state">
+                        <i class="fa-solid fa-spinner fa-spin loading-spinner"></i>
+                        <p>Loading access point profiles...</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Credentials View -->
+            <section class="view-section" id="view-credentials">
+                <div class="settings-card glass-panel">
+                    <div class="card-header">
+                        <i class="fa-solid fa-shield-halved header-icon"></i>
+                        <div>
+                            <h3>VPN & API Credentials</h3>
+                            <p>Configure account detail overrides for Gluetun and AP Manager access control.</p>
+                        </div>
+                    </div>
+                    <form class="settings-form" id="form-credentials">
+                        <div class="form-group">
+                            <label for="cred-wg-key">NordVPN WireGuard Private Key</label>
+                            <input type="password" id="cred-wg-key" placeholder="Enter WireGuard Private Key (for NordLynx)">
+                            <small>Required if using Wireguard (NordLynx) protocol.</small>
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group">
+                                <label for="cred-ovpn-user">OpenVPN Username</label>
+                                <input type="text" id="cred-ovpn-user" placeholder="Enter OpenVPN Service Username">
+                            </div>
+                            <div class="form-group">
+                                <label for="cred-ovpn-pass">OpenVPN Password</label>
+                                <input type="password" id="cred-ovpn-pass" placeholder="Enter OpenVPN Service Password">
+                            </div>
+                        </div>
+                        <small class="row-help">Required if using OpenVPN protocol. Get these credentials from your NordVPN dashboard.</small>
+                        <div class="form-group margin-top">
+                            <label for="cred-api-token">API Authorization Token</label>
+                            <input type="text" id="cred-api-token" placeholder="Bearer Token for secure access">
+                            <small>Changing this token requires updating your HTTP clients (and re-saving it in your browser storage).</small>
+                        </div>
+                        <div class="form-actions">
+                            <button type="submit" class="btn btn-primary" id="btn-save-credentials">
+                                <i class="fa-solid fa-floppy-disk"></i> Save Credentials
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </section>
+
+            <!-- WiFi Interfaces View -->
+            <section class="view-section" id="view-interfaces">
+                <div class="glass-panel">
+                    <div class="card-header">
+                        <i class="fa-solid fa-circle-nodes header-icon"></i>
+                        <div>
+                            <h3>Available WiFi Interfaces</h3>
+                            <p>Overview of system hardware interfaces and supported AP capabilities.</p>
+                        </div>
+                    </div>
+                    <div class="table-container">
+                        <table class="premium-table">
+                            <thead>
+                                <tr>
+                                    <th>Interface</th>
+                                    <th>Hardware Model</th>
+                                    <th>AP Support</th>
+                                    <th>Bands</th>
+                                    <th>Max Standard</th>
+                                    <th>Recomm. Default</th>
+                                </tr>
+                            </thead>
+                            <tbody id="interfaces-table-body">
+                                <tr>
+                                    <td colspan="6" class="text-center">Scanning system interfaces...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Create/Edit Stack Modal -->
+    <div class="modal" id="modal-stack">
+        <div class="modal-content glass-panel animated zoomIn">
+            <div class="modal-header">
+                <h3 id="modal-title">Create Access Point</h3>
+                <button class="btn-close-modal" id="btn-close-stack-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="form-stack">
+                <input type="hidden" id="stack-edit-mode" value="false">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="stack-id">Profile Name / ID</label>
+                        <input type="text" id="stack-id" placeholder="e.g. us_ap" required pattern="^[a-z0-9_-]+$" title="Lowercase letters, numbers, dash, underscore only">
+                    </div>
+                    <div class="form-group">
+                        <label for="stack-iface">WiFi Interface</label>
+                        <select id="stack-iface" required>
+                            <!-- Populated dynamically -->
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="stack-ssid">SSID (WiFi Name)</label>
+                        <input type="text" id="stack-ssid" placeholder="e.g. Protected_WiFi" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="stack-pass">WPA2 Password</label>
+                        <input type="password" id="stack-pass" placeholder="Minimum 8 characters" required minlength="8">
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="stack-vpn-type">VPN Protocol</label>
+                        <select id="stack-vpn-type" required>
+                            <option value="wireguard">WireGuard (NordLynx)</option>
+                            <option value="openvpn">OpenVPN</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="stack-vpn-city">VPN Location</label>
+                        <select id="stack-vpn-city" required>
+                            <!-- Populated dynamically -->
+                            <option value="United States">United States</option>
+                            <option value="Germany">Germany</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="accordion-header" id="adv-settings-toggle">
+                    <span>Advanced Network Settings (Auto-Allocated if empty)</span>
+                    <i class="fa-solid fa-chevron-down"></i>
+                </div>
+                <div class="accordion-content" id="adv-settings-content">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="stack-subnet">Subnet Range</label>
+                            <input type="text" id="stack-subnet" placeholder="e.g. 192.168.60.0/24">
+                        </div>
+                        <div class="form-group">
+                            <label for="stack-routing-table">Routing Table ID</label>
+                            <input type="number" id="stack-routing-table" placeholder="e.g. 100" min="10" max="250">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="stack-channel">WiFi Channel</label>
+                            <input type="number" id="stack-channel" placeholder="e.g. 6 (0 for auto)">
+                        </div>
+                        <div class="form-group">
+                            <label for="stack-hw-mode">802.11 Mode</label>
+                            <select id="stack-hw-mode">
+                                <option value="g">2.4 GHz (802.11g)</option>
+                                <option value="a">5 GHz (802.11a)</option>
+                                <option value="n">802.11n (High Speed)</option>
+                                <option value="ac">802.11ac (Very High Speed)</option>
+                                <option value="ax">802.11ax (WiFi 6)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary" id="btn-save-stack">Create Stack</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Logs Terminal Modal -->
+    <div class="modal" id="modal-logs">
+        <div class="modal-content glass-panel terminal-modal animated zoomIn">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-terminal brand-icon"></i> Container Logs: <span id="log-stack-id"></span></h3>
+                <button class="btn-close-modal" id="btn-close-logs-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="logs-tabs">
+                <button class="logs-tab active" data-tab="gluetun">Gluetun (VPN)</button>
+                <button class="logs-tab" data-tab="wifiap">WiFi AP (Hostapd/Dnsmasq)</button>
+                <button class="logs-tab" data-tab="adguard">AdGuard Home</button>
+            </div>
+            <div class="terminal-body" id="terminal-content">
+                <pre><code id="logs-output">Loading container logs...</code></pre>
+            </div>
+            <div class="terminal-footer">
+                <span class="logs-info"><i class="fa-solid fa-arrows-rotate"></i> Logs refresh automatically every 5s</span>
+                <button class="btn btn-secondary btn-small" id="btn-refresh-logs">Refresh Now</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Auth Overlay Modal -->
+    <div class="modal" id="modal-auth" style="display: none;">
+        <div class="modal-content glass-panel animated zoomIn" style="max-width: 420px; text-align: center; padding: 30px;">
+            <i class="fa-solid fa-lock" style="font-size: 40px; color: var(--color-primary); margin-bottom: 20px;"></i>
+            <h3 style="margin-bottom: 10px;">Bearer Token Required</h3>
+            <p style="font-size: 14px; color: var(--color-text-muted); margin-bottom: 20px; line-height: 1.5;">
+                This orchestrator is secured. Enter the API Bearer Token to access the dashboard.
+            </p>
+            <div class="form-group" style="margin-bottom: 20px; text-align: left;">
+                <label for="auth-token-input">API Bearer Token</label>
+                <input type="password" id="auth-token-input" placeholder="Paste your token here..." required style="width: 100%;">
+            </div>
+            <button class="btn btn-primary" id="btn-submit-auth" style="width: 100%; justify-content: center;">
+                <i class="fa-solid fa-key"></i> Authenticate
+            </button>
+            <p style="font-size: 12px; color: var(--color-text-muted); margin-top: 20px; line-height: 1.4;">
+                Tip: You can find the generated token in the orchestrator container boot logs:<br>
+                <code style="background: rgba(0,0,0,0.3); padding: 2px 6px; border-radius: 4px; display: inline-block; margin-top: 5px; font-family: monospace; font-size: 11px;">docker logs ap-manager</code>
+            </p>
+        </div>
+    </div>
+
+    <!-- Global Notification Banner -->
+    <div class="notification-container" id="notification-container"></div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
