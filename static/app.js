@@ -341,12 +341,12 @@ document.getElementById('btn-refresh-logs').addEventListener('click', fetchLogs)
 
 async function loadInterfacesTable() {
     const tbody = document.getElementById('interfaces-table-body');
-    tbody.innerHTML = `<tr><td colspan="6" class="text-center"><i class="fa-solid fa-spinner fa-spin"></i> Auditing WiFi hardware...</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" class="text-center"><i class="fa-solid fa-spinner fa-spin"></i> Auditing WiFi hardware...</td></tr>`;
 
     try {
         interfaces = await apiRequest('/api/wifi/interfaces') || [];
         if (interfaces.length === 0) {
-            tbody.innerHTML = `<tr><td colspan="6" class="text-center" style="color: var(--color-danger);">No wireless interfaces found. Ensure physical WiFi card is connected.</td></tr>`;
+            tbody.innerHTML = `<tr><td colspan="7" class="text-center" style="color: var(--color-danger);">No wireless interfaces found. Ensure physical WiFi card is connected.</td></tr>`;
             return;
         }
 
@@ -360,6 +360,9 @@ async function loadInterfacesTable() {
             if (i.supports_ac) stds.push('ac');
             if (i.supports_ax) stds.push('ax');
 
+            const security = ['WPA', 'WPA2'];
+            if (i.supports_wpa3) security.push('WPA3');
+
             return `
                 <tr>
                     <td><strong>${i.name}</strong></td>
@@ -371,12 +374,13 @@ async function loadInterfacesTable() {
                     </td>
                     <td>${bands.join(' / ')}</td>
                     <td>802.11${stds.join('/')}</td>
+                    <td>${security.join(' / ')}</td>
                     <td>Ch ${i.default_channel} (${i.default_hw_mode.toUpperCase()} / ${i.default_width}MHz)</td>
                 </tr>
             `;
         }).join('');
     } catch {
-        tbody.innerHTML = `<tr><td colspan="6" class="text-center" style="color: var(--color-danger);">Failed to query interfaces.</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" class="text-center" style="color: var(--color-danger);">Failed to query interfaces.</td></tr>`;
     }
 }
 
@@ -454,8 +458,9 @@ document.getElementById('btn-create-ap').addEventListener('click', async () => {
         // Auto populate fields for first location
         updateDefaultStackFields();
         
-        // Sync security options with default selected interface
+        // Sync security + hw-mode options with default selected interface
         updateSecurityOptionsForSelectedInterface();
+        updateHwModeOptions();
     } catch {}
 });
 
@@ -514,6 +519,27 @@ function updateSecurityOptionsForSelectedInterface() {
     }
 }
 
+// Show only 802.11 modes the selected adapter actually supports.
+function updateHwModeOptions() {
+    const ifaceName = document.getElementById('stack-iface').value;
+    const ifaceObj = interfaces.find(i => i.name === ifaceName);
+    const hwSelect = document.getElementById('stack-hw-mode');
+    if (!hwSelect || !ifaceObj) return;
+
+    let best = null;
+    for (const [mode, req] of [['ax', 'supports_ax'], ['ac', 'supports_ac'], ['n', 'supports_n'], ['a', 'supports_5ghz'], ['g', 'supports_2_4ghz']]) {
+        const opt = hwSelect.querySelector(`option[value="${mode}"]`);
+        if (!opt) continue;
+        const ok = ifaceObj[req];
+        opt.disabled = !ok;
+        if (ok && best === null) best = mode; // first (highest) match wins
+    }
+    if (best === null) best = 'g';
+    if (hwSelect.querySelector(`option[value="${hwSelect.value}"]`).disabled) {
+        hwSelect.value = best;
+    }
+}
+
 function handleSecurityChange() {
     const securitySelect = document.getElementById('stack-security');
     if (!securitySelect) return;
@@ -542,7 +568,10 @@ function handleSecurityChange() {
     }
 }
 
-document.getElementById('stack-iface').addEventListener('change', updateSecurityOptionsForSelectedInterface);
+document.getElementById('stack-iface').addEventListener('change', () => {
+    updateSecurityOptionsForSelectedInterface();
+    updateHwModeOptions();
+});
 document.getElementById('stack-security').addEventListener('change', handleSecurityChange);
 
 document.getElementById('btn-close-stack-modal').addEventListener('click', () => {

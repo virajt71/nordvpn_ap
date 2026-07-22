@@ -132,12 +132,13 @@
                                     <th>AP Support</th>
                                     <th>Bands</th>
                                     <th>Max Standard</th>
+                                    <th>Security</th>
                                     <th>Recomm. Default</th>
                                 </tr>
                             </thead>
                             <tbody id="interfaces-table-body">
                                 <tr>
-                                    <td colspan="6" class="text-center">Scanning system interfaces...</td>
+                                    <td colspan="7" class="text-center">Scanning system interfaces...</td>
                                 </tr>
                             </tbody>
                         </table>
@@ -233,11 +234,11 @@
                         <div class="form-group">
                             <label for="stack-hw-mode">802.11 Mode</label>
                             <select id="stack-hw-mode">
-                                <option value="g">2.4 GHz (802.11g)</option>
-                                <option value="a">5 GHz (802.11a)</option>
-                                <option value="n">802.11n (High Speed)</option>
-                                <option value="ac">802.11ac (Very High Speed)</option>
-                                <option value="ax">802.11ax (WiFi 6)</option>
+                                <option value="g" data-req="2_4ghz">2.4 GHz (802.11g)</option>
+                                <option value="a" data-req="5ghz">5 GHz (802.11a)</option>
+                                <option value="n" data-req="n">802.11n (High Speed)</option>
+                                <option value="ac" data-req="ac">802.11ac (Very High Speed)</option>
+                                <option value="ax" data-req="ax">802.11ax (WiFi 6)</option>
                             </select>
                         </div>
                     </div>
