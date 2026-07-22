@@ -136,6 +136,33 @@ async function checkSystemHealth() {
     }
 }
 
+// ─── Live stack status over WebSocket ───────────────────────────────────────
+let stackSocket = null;
+let stackSocketRetry = null;
+
+function connectStackSocket() {
+    if (stackSocketRetry) clearTimeout(stackSocketRetry);
+    const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${proto}//${location.host}/ws/stacks`);
+    stackSocket = ws;
+
+    ws.onmessage = (ev) => {
+        try {
+            const data = JSON.parse(ev.data);
+            if (!Array.isArray(data)) return;
+            stacks = data;
+            // Repaint only when dashboard is active to avoid clobbering other views.
+            if (document.getElementById('view-dashboard').classList.contains('active')) {
+                renderStacks();
+            }
+        } catch {}
+    };
+    ws.onclose = () => {
+        stackSocketRetry = setTimeout(connectStackSocket, 3000); // ponytail: fixed 3s backoff, exponential if flapping later
+    };
+    ws.onerror = () => ws.close();
+}
+
 // ─── Loaders ─────────────────────────────────────────────────────────────────
 
 async function loadDashboard() {
@@ -150,6 +177,7 @@ async function loadDashboard() {
     try {
         stacks = await apiRequest('/api/stacks') || [];
         renderStacks();
+        connectStackSocket();
     } catch {
         container.innerHTML = `
             <div class="loading-state">
@@ -669,4 +697,5 @@ function stopHealthCheck() {
 
 // Start application
 startHealthCheck();
+connectStackSocket();
 switchView('dashboard');

@@ -63,11 +63,15 @@ async fn main() {
     // Load credentials
     let _creds = config_manager.load_credentials();
 
+    // Broadcast channel for live stack-status snapshots (WebSocket subscribers).
+    let (stack_tx, _stack_rx) = tokio::sync::broadcast::channel(16);
+
     // Setup state
     let state = api::AppState {
         config_manager,
         docker_manager,
         host_project_dir_defaulted,
+        stack_tx,
     };
 
     // CORS configuration

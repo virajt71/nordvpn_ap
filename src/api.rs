@@ -2,7 +2,10 @@ use crate::config::{ConfigManager, Stack};
 use crate::docker::DockerManager;
 use crate::wifi;
 use axum::{
-    extract::{Path, Query, State},
+    extract::{
+        ws::{Message, WebSocket, WebSocketUpgrade},
+        Path, Query, State,
+    },
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -12,13 +15,18 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::process::Command;
 use std::sync::Arc;
+use tokio::sync::broadcast;
 
 #[derive(Clone)]
 pub struct AppState {
     pub config_manager: Arc<ConfigManager>,
     pub docker_manager: Arc<DockerManager>,
     pub host_project_dir_defaulted: bool,
+    pub stack_tx: StackSnapshotTx,
 }
+
+/// Channel carrying the latest full stack-status snapshot for all WS subscribers.
+pub type StackSnapshotTx = broadcast::Sender<Vec<StackStatusDto>>;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct ContainerStatusDto {
@@ -82,6 +90,31 @@ fn aggregate_status(state: &AppState, id: &str) -> (Vec<ContainerStatusDto>, Str
     (containers, status.to_string())
 }
 
+// Build the full stack-status list for every configured stack.
+fn build_snapshot(state: &AppState) -> Vec<StackStatusDto> {
+    let Ok(stacks) = state.config_manager.load_stacks() else {
+        return Vec::new();
+    };
+    stacks
+        .into_iter()
+        .map(|s| {
+            let (containers, status) = aggregate_status(state, &s.id);
+            let vpn_ip = if status == "running" {
+                state.docker_manager.get_vpn_ip(&s.id)
+            } else {
+                None
+            };
+            StackStatusDto { stack: s, status, vpn_ip, containers }
+        })
+        .collect()
+}
+
+/// Recompute and broadcast the latest snapshot to all WS subscribers.
+// ponytail: global broadcast, one snapshot for all clients; per-client filtering if needed later.
+pub fn publish_stacks(state: &AppState) {
+    let _ = state.stack_tx.send(build_snapshot(state));
+}
+
 // Returns the first collision error against an existing stack, if any.
 fn collision_error(existing: &Stack, candidate: &Stack) -> Option<String> {
     if existing.ap_iface == candidate.ap_iface {
@@ -114,35 +147,52 @@ pub fn create_router(state: AppState) -> Router {
         .route("/health", get(get_health));
 
     Router::new()
+        .route("/ws/stacks", get(stream_stacks))
         .nest("/api", api_routes)
         .with_state(state)
+}
+
+async fn stream_stacks(
+    ws: WebSocketUpgrade,
+    State(state): State<AppState>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_socket(socket, state))
+}
+
+async fn handle_socket(mut socket: WebSocket, state: AppState) {
+    // Send current snapshot immediately on connect.
+    let snap = build_snapshot(&state);
+    if let Ok(msg) = serde_json::to_string(&snap) {
+        let _ = socket.send(Message::Text(msg.into())).await;
+    }
+
+    let mut rx = state.stack_tx.subscribe();
+    loop {
+        match rx.recv().await {
+            Ok(snap) => {
+                let msg = match serde_json::to_string(&snap) {
+                    Ok(m) => m,
+                    Err(_) => continue,
+                };
+                if socket.send(Message::Text(msg.into())).await.is_err() {
+                    break; // client gone
+                }
+            }
+            Err(broadcast::error::RecvError::Lagged(_)) => continue, // ponytail: drop stale, client resyncs on next
+            Err(broadcast::error::RecvError::Closed) => break,
+        }
+    }
 }
 
 // ─── Stack Handlers ──────────────────────────────────────────────────────────
 
 async fn list_stacks(State(state): State<AppState>) -> impl IntoResponse {
-    let stacks = match state.config_manager.load_stacks() {
-        Ok(s) => s,
-        Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response(),
-    };
-
-    let mut dtos = Vec::new();
-    for s in stacks {
-        let (containers, status) = aggregate_status(&state, &s.id);
-        let vpn_ip = if status == "running" {
-            state.docker_manager.get_vpn_ip(&s.id)
-        } else {
-            None
-        };
-
-        dtos.push(StackStatusDto {
-            stack: s,
-            status,
-            vpn_ip,
-            containers,
-        });
+    // Touch the config so a bad path surfaces as 500 rather than an empty list.
+    if let Err(e) = state.config_manager.load_stacks() {
+        return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response();
     }
 
+    let dtos = build_snapshot(&state);
     Json(dtos).into_response()
 }
 
@@ -218,6 +268,7 @@ async fn create_stack(
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response();
     }
 
+    publish_stacks(&state);
     (StatusCode::CREATED, Json(new_stack)).into_response()
 }
 
@@ -297,6 +348,7 @@ async fn update_stack(
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response();
     }
 
+    publish_stacks(&state);
     Json(updated).into_response()
 }
 
@@ -321,6 +373,7 @@ async fn delete_stack(Path(id): Path<String>, State(state): State<AppState>) -> 
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response();
     }
 
+    publish_stacks(&state);
     Json(json!({ "success": true })).into_response()
 }
 
@@ -336,21 +389,30 @@ async fn start_stack(Path(id): Path<String>, State(state): State<AppState>) -> i
     }
 
     match state.docker_manager.start_stack(&id) {
-        Ok(out) => Json(json!({ "success": true, "output": out })).into_response(),
+        Ok(out) => {
+            publish_stacks(&state);
+            Json(json!({ "success": true, "output": out })).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response(),
     }
 }
 
 async fn stop_stack(Path(id): Path<String>, State(state): State<AppState>) -> impl IntoResponse {
     match state.docker_manager.stop_stack(&id) {
-        Ok(out) => Json(json!({ "success": true, "output": out })).into_response(),
+        Ok(out) => {
+            publish_stacks(&state);
+            Json(json!({ "success": true, "output": out })).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response(),
     }
 }
 
 async fn restart_stack(Path(id): Path<String>, State(state): State<AppState>) -> impl IntoResponse {
     match state.docker_manager.restart_stack(&id) {
-        Ok(out) => Json(json!({ "success": true, "output": out })).into_response(),
+        Ok(out) => {
+            publish_stacks(&state);
+            Json(json!({ "success": true, "output": out })).into_response()
+        }
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response(),
     }
 }
