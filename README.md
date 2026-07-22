@@ -12,9 +12,11 @@ A powerful, multi-profile Dockerized solution to turn your Linux machine into a 
 -   **Built-in Kill-Switch**: Powered by [Gluetun](https://github.com/qdm12/gluetun), ensuring no data leaks if the VPN connection drops.
 -   **DNS Ad-Blocking**: Integrated per-stack AdGuard Home intercepts DNS queries to block ads while tunneling requests securely through the VPN.
 -   **WiFi Security**: Supports WPA2-PSK, WPA3-SAE, and Mixed mode.
+-   **WiFi Hardware Audit**: The *System → WiFi Hardware* page lists each detected interface with its supported bands, 802.11 standards (a/b/g/n/ac/ax), and WPA3 capability; the Create AP dialog only enables 802.11 modes your selected adapter actually supports.
 -   **Auto-Auditing**: Automatically probes WiFi hardware to suggest optimal channels, modes, and channel widths.
--   **Bearer Token Security**: Access to the API and web dashboard is secured using a customizable Bearer Token authorization scheme.
+-   **Real-Time Dashboard**: Stack status streams live over a WebSocket (`/ws/stacks`) — start/stop/restart and VPN IP changes appear instantly, no refresh needed.
 -   **Conflict Prevention**: Automatically allocates non-overlapping subnets (starting at `192.168.60.0/24`) and routing tables (starting at `100`) to prevent collisions between profiles.
+-   **API**: REST + WebSocket management API (see Endpoints). *Currently served without authentication — run on a trusted network or behind an authenticating reverse proxy.*
 
 ---
 
@@ -107,7 +109,7 @@ docker compose up -d --build
 Navigate your browser to `http://localhost:8080/`.
 - The dashboard automatically detects and lists your WiFi interfaces and audits their capabilities.
 - You can create, edit, start, stop, restart, delete, and view logs of all access point profiles directly from the Web UI.
-- On first run, a secure API Bearer Token is generated (displayed in the sidebar). Copy it to authenticate your API client or UI session if required.
+- Stack status (running/starting/stopped, VPN IP) updates live over the WebSocket — no manual refresh.
 
 ---
 
@@ -127,12 +129,13 @@ The `ap-manager` exposes a REST API for remote management:
 | `POST` | `/api/stacks/:id/restart` | Restart containers for a specific stack |
 | `GET` | `/api/stacks/:id/logs` | Query container logs for Gluetun, WiFi-AP, and AdGuard |
 | `GET` | `/api/credentials` | Query configured credentials configuration presence |
-| `PATCH` | `/api/credentials` | Update OpenVPN, WireGuard, or API Bearer Token credentials |
+| `PATCH` | `/api/credentials` | Update OpenVPN or WireGuard credentials |
 | `GET` | `/api/wifi/interfaces` | List host WiFi interfaces and audited capabilities |
 | `GET` | `/api/vpn/locations` | Query available NordVPN exit node locations |
 | `GET` | `/api/health` | Get health check status of the orchestrator and Docker daemon |
+| `WS`  | `/ws/stacks` | Live stream of all stack statuses (JSON array); pushes on every start/stop/restart/create/update/delete |
 
-*Note: All API requests require the header `Authorization: Bearer <API_TOKEN>`.*
+*Note: The API is currently served without authentication. Deploy behind a trusted network or an authenticating reverse proxy before exposing it.*
 
 ---
 
