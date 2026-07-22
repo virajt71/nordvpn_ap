@@ -6,17 +6,19 @@ A powerful, multi-profile Dockerized solution to turn your Linux machine into a 
 
 ## 🚀 Features
 
--   **Rust API Orchestrator**: A lightweight Axum backend that programmatically manages access point stacks via Docker.
--   **Web Dashboard UI**: A premium, responsive dark-mode dashboard (HTML/CSS/JS with glassmorphism aesthetics) served directly by the orchestrator.
--   **Multi-Profile Support**: Run multiple hotspots simultaneously on different WiFi interfaces (e.g., one for US, one for UK).
--   **Built-in Kill-Switch**: Powered by [Gluetun](https://github.com/qdm12/gluetun), ensuring no data leaks if the VPN connection drops.
--   **DNS Ad-Blocking**: Integrated per-stack AdGuard Home intercepts DNS queries to block ads while tunneling requests securely through the VPN.
--   **WiFi Security**: Supports WPA2-PSK, WPA3-SAE, and Mixed mode.
--   **WiFi Hardware Audit**: The *System → WiFi Hardware* page lists each detected interface with its supported bands, 802.11 standards (a/b/g/n/ac/ax), and WPA3 capability; the Create AP dialog only enables 802.11 modes your selected adapter actually supports.
--   **Auto-Auditing**: Automatically probes WiFi hardware to suggest optimal channels, modes, and channel widths.
--   **Real-Time Dashboard**: Stack status streams live over a WebSocket (`/ws/stacks`) — start/stop/restart and VPN IP changes appear instantly, no refresh needed.
--   **Conflict Prevention**: Automatically allocates non-overlapping subnets (starting at `192.168.60.0/24`) and routing tables (starting at `100`) to prevent collisions between profiles.
--   **API**: REST + WebSocket management API (see Endpoints). *Currently served without authentication — run on a trusted network or behind an authenticating reverse proxy.*
+- **Rust API Orchestrator**: A lightweight Axum backend that programmatically manages access point sibling stacks on the host via Docker.
+- **Web Dashboard UI**: A premium, responsive dark-mode dashboard (HTML/CSS/JS with glassmorphism aesthetics) served directly by the orchestrator.
+- **VPN Location Driven Flow**: The Create AP form modal places VPN Location at the very top. Selecting a country dynamically auto-populates the Profile ID slug (e.g. `germany`, `united_states`) and the SSID (e.g. `AP_Germany`, `AP_United_States`) in real-time, preserving user overrides.
+- **WiFi Security Selection**: Supports multiple encryption modes: **None (Open Network)**, **WPA Legacy**, **WPA2 (Recommended)**, **WPA3 (Modern SAE)**, and **WPA2/WPA3 Mixed**.
+- **Adapter-Aware WPA3 support**: Automatically probes host WiFi adapters to verify WPA3 capabilities (`SAE` key suite support). If the selected adapter lacks WPA3 support, WPA3 options are automatically disabled in the UI.
+- **Interactive Password Toggling**: Selecting "None (Open Network)" dynamically hides the password input field and bypasses WPA validation checks.
+- **Strict Password Validation**: Validates passwords to match standard WPA requirements (8 to 63 characters, printable ASCII only).
+- **Multi-Profile Support**: Run multiple hotspots simultaneously on different WiFi interfaces (e.g., one for US, one for UK).
+- **Built-in Kill-Switch**: Powered by [Gluetun](https://github.com/qdm12/gluetun), ensuring no data leaks if the VPN connection drops.
+- **DNS Ad-Blocking**: Integrated per-stack AdGuard Home intercepts DNS queries to block ads while tunneling requests securely through the VPN.
+- **WiFi Hardware Audit**: The *System → WiFi Hardware* page lists each detected interface with its supported bands, 802.11 standards (a/b/g/n/ac/ax), and WPA3 capability; the Create AP dialog only enables 802.11 modes your selected adapter actually supports.
+- **Conflict Prevention**: Automatically allocates non-overlapping subnets (starting at `192.168.60.0/24`) and routing tables (starting at `100`) to prevent collisions between profiles.
+- **API**: REST management API (see Endpoints). *Served without authentication — run on a trusted network or behind an authenticating reverse proxy.*
 
 ---
 
@@ -98,6 +100,14 @@ OPENVPN_PASSWORD="your-nordvpn-service-password"
 WIREGUARD_PRIVATE_KEY="your-wireguard-private-key"
 ```
 
+**Getting your WireGuard private key:** NordVPN does not expose WireGuard keys from their dashboard directly. Generate an Access Token via the NordVPN Dashboard → Manual Setup, then run the following command to extract your key:
+
+```bash
+curl -s -u token:<YOUR_TOKEN> \
+  https://api.nordvpn.com/v1/users/services/credentials \
+  | jq -r .nordlynx_private_key
+```
+
 ### 2. Launch the Orchestrator
 Export the project directory on your host and run `docker compose` to start the orchestrator:
 ```bash
@@ -154,16 +164,22 @@ The `ap-manager` exposes a REST API for remote management:
 -   **OS**: Linux (with a kernel that supports hostapd/policy routing).
 -   **Docker & Docker Compose**: Installed and running.
 -   **Hardware**: A WiFi network card that supports **AP (Access Point) mode**. Run `iw list` and look for `AP` in "Supported interface modes".
+-   **Host Project Path Environment Variable**: When starting the orchestrator container, the absolute path to the project root on the host machine must be passed in the `HOST_PROJECT_DIR` environment variable (e.g., `export HOST_PROJECT_DIR=$(pwd)`). This enables sibling containers launched by the orchestrator (like AdGuard Home or hostapd) to correctly resolve bind mounts relative to the host filesystem.
 
 ---
 
 ## 🔧 Legacy CLI Wizard Usage
 
-If you prefer terminal-only operation, you can still run the legacy setup script:
+If you prefer terminal-only operation, you can still run the legacy setup script located inside the `legacy/` directory:
 ```bash
-./startup.sh
+./legacy/startup.sh
 ```
-Follow the interactive prompts to create, edit, or launch country profiles from your terminal shell. Refer to `startup.sh usage` by running `./startup.sh --help`.
+Follow the interactive prompts to create, edit, or launch country profiles from your terminal shell. Refer to `startup.sh` usage by running `./legacy/startup.sh --help`.
 
-understanding wifi Standards 802.11 
-https://www.netia.pl/pl/blog/standardy-wi-fi-802-11-a-b-g-n-ac-ax
+---
+
+## 📚 References
+
+- **Understanding WiFi Standards (802.11a/b/g/n/ac/ax)**: [Standardy Wi-Fi](https://www.netia.pl/pl/blog/standardy-wi-fi-802-11-a-b-g-n-ac-ax)
+- **hostapd documentation**: [w1.fi/hostapd](https://w1.fi/hostapd/)
+- **Gluetun VPN client**: [GitHub - qdm12/gluetun](https://github.com/qdm12/gluetun)
