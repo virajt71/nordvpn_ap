@@ -459,21 +459,18 @@ document.getElementById('btn-create-ap').addEventListener('click', async () => {
     } catch {}
 });
 
+// Normalize a location label into a clean identifier token.
+function slugifyLocation(name, lowercase = true) {
+    const s = lowercase ? name.toLowerCase() : name;
+    return s.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g, '');
+}
+
 function updateDefaultStackFields() {
     const citySelect = document.getElementById('stack-vpn-city');
     const locationVal = citySelect.value;
     if (locationVal && locationVal !== 'Loading locations...') {
-        // Lowercase slugified representation (e.g. afghanistan or united_states)
-        const newSlug = locationVal.toLowerCase()
-            .replace(/[^a-z0-9]/g, '_')
-            .replace(/_+/g, '_')
-            .replace(/^_+|_+$/g, '');
-            
-        // SSID: AP_{VPN location} replacing spaces with underscores
-        const newSsid = 'AP_' + locationVal.replace(/\s+/g, '_')
-            .replace(/[^a-zA-Z0-9_]/g, '')
-            .replace(/_+/g, '_')
-            .replace(/^_+|_+$/g, '');
+        const newSlug = slugifyLocation(locationVal);
+        const newSsid = 'AP_' + slugifyLocation(locationVal, false);
 
         const idInput = document.getElementById('stack-id');
         const ssidInput = document.getElementById('stack-ssid');
@@ -502,30 +499,18 @@ function updateSecurityOptionsForSelectedInterface() {
     
     const wpa3Opt = securitySelect.querySelector('option[value="wpa3"]');
     const mixedOpt = securitySelect.querySelector('option[value="mixed"]');
-    
-    if (ifaceObj && !ifaceObj.supports_wpa3) {
-        if (wpa3Opt) {
-            wpa3Opt.disabled = true;
-            wpa3Opt.text = "WPA3 (Modern SAE) - Unsupported by adapter";
-        }
-        if (mixedOpt) {
-            mixedOpt.disabled = true;
-            mixedOpt.text = "WPA2/WPA3 Mixed - Unsupported by adapter";
-        }
-        
-        if (securitySelect.value === 'wpa3' || securitySelect.value === 'mixed') {
-            securitySelect.value = 'wpa2';
-            handleSecurityChange();
-        }
-    } else {
-        if (wpa3Opt) {
-            wpa3Opt.disabled = false;
-            wpa3Opt.text = "WPA3 (Modern SAE)";
-        }
-        if (mixedOpt) {
-            mixedOpt.disabled = false;
-            mixedOpt.text = "WPA2/WPA3 Mixed";
-        }
+    const setOpt = (opt, supported) => {
+        if (!opt) return;
+        opt.disabled = !supported;
+        opt.text = supported ? opt.dataset.label : opt.dataset.label + " - Unsupported by adapter";
+    };
+    const supported = !(ifaceObj && !ifaceObj.supports_wpa3);
+    setOpt(wpa3Opt, supported);
+    setOpt(mixedOpt, supported);
+
+    if (!supported && (securitySelect.value === 'wpa3' || securitySelect.value === 'mixed')) {
+        securitySelect.value = 'wpa2';
+        handleSecurityChange();
     }
 }
 
@@ -549,17 +534,10 @@ function handleSecurityChange() {
         passwordRow.style.display = 'flex';
         passwordInput.required = true;
         passwordInput.minlength = 8;
-        
+
         if (passwordHelp) {
-            if (security === 'wpa3') {
-                passwordHelp.innerText = "WPA3 SAE requires 8-63 characters. Special characters are fully supported.";
-            } else if (security === 'wpa2') {
-                passwordHelp.innerText = "WPA2 CCMP requires 8-63 characters. Special characters are fully supported.";
-            } else if (security === 'wpa') {
-                passwordHelp.innerText = "WPA Legacy (WPA-PSK) requires 8-63 characters. Special characters are fully supported.";
-            } else {
-                passwordHelp.innerText = "Mixed WPA2/WPA3 requires 8-63 characters. Special characters are fully supported.";
-            }
+            const label = { wpa3: 'WPA3 SAE', wpa2: 'WPA2 CCMP', wpa: 'WPA Legacy (WPA-PSK)', mixed: 'Mixed WPA2/WPA3' };
+            passwordHelp.innerText = `${label[security] || label.mixed} requires 8-63 characters. Special characters are fully supported.`;
         }
     }
 }

@@ -58,6 +58,45 @@ pub struct UpdateCredentialsInput {
     pub wireguard_private_key: Option<String>,
 }
 
+const CONTAINER_ROLES: &[&str] = &["gluetun", "adguard", "wifi-ap"];
+
+// Inspect the three stack containers and derive the aggregate stack status.
+fn aggregate_status(state: &AppState, id: &str) -> (Vec<ContainerStatusDto>, String) {
+    let mut containers = Vec::new();
+    let mut running = 0;
+    let mut present = 0;
+    for role in CONTAINER_ROLES {
+        if let Some(st) = state.docker_manager.inspect_container_status(&format!("{}-{}", role, id)) {
+            present += 1;
+            if st == "running" { running += 1; }
+            containers.push(ContainerStatusDto { name: role.to_string(), status: st });
+        }
+    }
+    let status = if running == CONTAINER_ROLES.len() {
+        "running"
+    } else if present > 0 {
+        "starting"
+    } else {
+        "stopped"
+    };
+    (containers, status.to_string())
+}
+
+// Returns the first collision error against an existing stack, if any.
+fn collision_error(existing: &Stack, candidate: &Stack) -> Option<String> {
+    if existing.ap_iface == candidate.ap_iface {
+        Some(format!("WiFi Interface '{}' is already in use by stack '{}'", candidate.ap_iface, existing.id))
+    } else if existing.subnet == candidate.subnet {
+        Some(format!("Subnet '{}' is already allocated", candidate.subnet))
+    } else if existing.routing_table == candidate.routing_table {
+        Some(format!("Routing table '{}' is already allocated", candidate.routing_table))
+    } else if existing.ssid == candidate.ssid {
+        Some(format!("SSID '{}' is already in use", candidate.ssid))
+    } else {
+        None
+    }
+}
+
 pub fn create_router(state: AppState) -> Router {
     let api_routes = Router::new()
         // Stack routes
@@ -89,37 +128,7 @@ async fn list_stacks(State(state): State<AppState>) -> impl IntoResponse {
 
     let mut dtos = Vec::new();
     for s in stacks {
-        let gluetun_c = format!("gluetun-{}", s.id);
-        let adguard_c = format!("adguard-{}", s.id);
-        let wifiap_c = format!("wifi-ap-{}", s.id);
-
-        let gluetun_status = state.docker_manager.inspect_container_status(&gluetun_c);
-        let adguard_status = state.docker_manager.inspect_container_status(&adguard_c);
-        let wifiap_status = state.docker_manager.inspect_container_status(&wifiap_c);
-
-        let mut containers = Vec::new();
-        if let Some(ref st) = gluetun_status {
-            containers.push(ContainerStatusDto { name: "gluetun".to_string(), status: st.clone() });
-        }
-        if let Some(ref st) = adguard_status {
-            containers.push(ContainerStatusDto { name: "adguard".to_string(), status: st.clone() });
-        }
-        if let Some(ref st) = wifiap_status {
-            containers.push(ContainerStatusDto { name: "wifi-ap".to_string(), status: st.clone() });
-        }
-
-        // Determine stack status
-        let status = if gluetun_status.as_deref() == Some("running") 
-            && adguard_status.as_deref() == Some("running") 
-            && wifiap_status.as_deref() == Some("running") 
-        {
-            "running".to_string()
-        } else if gluetun_status.is_some() || adguard_status.is_some() || wifiap_status.is_some() {
-            "starting".to_string()
-        } else {
-            "stopped".to_string()
-        };
-
+        let (containers, status) = aggregate_status(&state, &s.id);
         let vpn_ip = if status == "running" {
             state.docker_manager.get_vpn_ip(&s.id)
         } else {
@@ -193,17 +202,8 @@ async fn create_stack(
 
     // Check collisions
     for s in &stacks {
-        if s.ap_iface == new_stack.ap_iface {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("WiFi Interface '{}' is already in use by stack '{}'", new_stack.ap_iface, s.id) }))).into_response();
-        }
-        if s.subnet == new_stack.subnet {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("Subnet '{}' is already allocated", new_stack.subnet) }))).into_response();
-        }
-        if s.routing_table == new_stack.routing_table {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("Routing table '{}' is already allocated", new_stack.routing_table) }))).into_response();
-        }
-        if s.ssid == new_stack.ssid {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("SSID '{}' is already in use", new_stack.ssid) }))).into_response();
+        if let Some(err) = collision_error(s, &new_stack) {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": err }))).into_response();
         }
     }
 
@@ -232,36 +232,7 @@ async fn get_stack(Path(id): Path<String>, State(state): State<AppState>) -> imp
         None => return (StatusCode::NOT_FOUND, Json(json!({ "error": "Stack not found" }))).into_response(),
     };
 
-    let gluetun_c = format!("gluetun-{}", id);
-    let adguard_c = format!("adguard-{}", id);
-    let wifiap_c = format!("wifi-ap-{}", id);
-
-    let gluetun_status = state.docker_manager.inspect_container_status(&gluetun_c);
-    let adguard_status = state.docker_manager.inspect_container_status(&adguard_c);
-    let wifiap_status = state.docker_manager.inspect_container_status(&wifiap_c);
-
-    let mut containers = Vec::new();
-    if let Some(st) = gluetun_status.clone() {
-        containers.push(ContainerStatusDto { name: "gluetun".to_string(), status: st });
-    }
-    if let Some(st) = adguard_status.clone() {
-        containers.push(ContainerStatusDto { name: "adguard".to_string(), status: st });
-    }
-    if let Some(st) = wifiap_status.clone() {
-        containers.push(ContainerStatusDto { name: "wifi-ap".to_string(), status: st });
-    }
-
-    let status = if gluetun_status.as_deref() == Some("running") 
-        && adguard_status.as_deref() == Some("running") 
-        && wifiap_status.as_deref() == Some("running") 
-    {
-        "running".to_string()
-    } else if gluetun_status.is_some() || adguard_status.is_some() || wifiap_status.is_some() {
-        "starting".to_string()
-    } else {
-        "stopped".to_string()
-    };
-
+    let (containers, status) = aggregate_status(&state, &id);
     let vpn_ip = if status == "running" {
         state.docker_manager.get_vpn_ip(&id)
     } else {
@@ -309,17 +280,8 @@ async fn update_stack(
     // Re-verify collisions (excluding itself)
     for (i, s) in stacks.iter().enumerate() {
         if i == idx { continue; }
-        if s.ap_iface == updated.ap_iface {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("WiFi Interface '{}' is already in use", updated.ap_iface) }))).into_response();
-        }
-        if s.subnet == updated.subnet {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("Subnet '{}' is already allocated", updated.subnet) }))).into_response();
-        }
-        if s.routing_table == updated.routing_table {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("Routing table '{}' is already allocated", updated.routing_table) }))).into_response();
-        }
-        if s.ssid == updated.ssid {
-            return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("SSID '{}' is already in use", updated.ssid) }))).into_response();
+        if let Some(err) = collision_error(s, &updated) {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": err }))).into_response();
         }
     }
 
