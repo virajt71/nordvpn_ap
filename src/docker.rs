@@ -51,7 +51,7 @@ impl DockerManager {
         let wg_key = creds.wireguard_private_key.as_deref().unwrap_or("");
 
         // Subnet calculation: find outbound subnet or default to 0.0.0.0/0
-        let firewall_outbound_subnets = "0.0.0.0/0";
+        let firewall_outbound_subnets = &stack.subnet;
 
         // Template string
         let compose_content = format!(

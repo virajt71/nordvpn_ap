@@ -13,6 +13,7 @@ pub struct WifiInterface {
     pub supports_n: bool,
     pub supports_ac: bool,
     pub supports_ax: bool,
+    pub supports_wpa3: bool,
     pub default_channel: u8,
     pub default_hw_mode: String,
     pub default_width: u8,
@@ -88,6 +89,7 @@ fn audit_interface(iface: &str) -> WifiInterface {
         supports_n: false,
         supports_ac: false,
         supports_ax: false,
+        supports_wpa3: false,
         default_channel: 6,
         default_hw_mode: "g".to_string(),
         default_width: 20,
@@ -171,12 +173,18 @@ fn audit_interface(iface: &str) -> WifiInterface {
             }
         }
 
+        let mut supports_wpa3 = false;
+        if stdout.to_lowercase().contains("sae") || stdout.contains("00-0f-ac:8") {
+            supports_wpa3 = true;
+        }
+
         default_interface.supports_ap = supports_ap;
         default_interface.supports_2_4ghz = supports_2_4ghz;
         default_interface.supports_5ghz = supports_5ghz;
         default_interface.supports_n = supports_n;
         default_interface.supports_ac = supports_ac;
         default_interface.supports_ax = supports_ax;
+        default_interface.supports_wpa3 = supports_wpa3;
 
         // Determine recommended defaults
         if supports_5ghz {

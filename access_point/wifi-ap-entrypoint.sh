@@ -43,6 +43,18 @@ auth_algs=1
 EOF
 
     case "${AP_SECURITY,,}" in
+        none|open)
+            # Open network, no WPA ciphers or password
+            ;;
+        wpa)
+            cat >> /tmp/hostapd-${COUNTRY}.conf <<EOF
+wpa=1
+wpa_key_mgmt=WPA-PSK
+wpa_pairwise=TKIP CCMP
+rsn_pairwise=CCMP
+wpa_passphrase=${AP_PASSWORD}
+EOF
+            ;;
         wpa3)
             cat >> /tmp/hostapd-${COUNTRY}.conf <<EOF
 wpa=2
@@ -62,7 +74,7 @@ wpa_passphrase=${AP_PASSWORD}
 sae_password=${AP_PASSWORD}
 EOF
             ;;
-        *)
+        wpa2|*)
             cat >> /tmp/hostapd-${COUNTRY}.conf <<EOF
 wpa=2
 wpa_key_mgmt=WPA-PSK

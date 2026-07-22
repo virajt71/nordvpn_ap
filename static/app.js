@@ -5,6 +5,8 @@ let locations = [];
 let activeLogStackId = null;
 let logsInterval = null;
 let activeLogTab = 'gluetun';
+let lastAutoProfileId = '';
+let lastAutoSsid = '';
 
 // DOM Elements
 const views = {
@@ -419,6 +421,12 @@ document.getElementById('form-credentials').addEventListener('submit', async (e)
 // ─── Create AP Modal Handlers ────────────────────────────────────────────────
 
 document.getElementById('btn-create-ap').addEventListener('click', async () => {
+    // Reset form and tracked auto values
+    document.getElementById('form-stack').reset();
+    lastAutoProfileId = '';
+    lastAutoSsid = '';
+    handleSecurityChange();
+
     // Populate form drop downs
     const ifaceSelect = document.getElementById('stack-iface');
     ifaceSelect.innerHTML = `<option>Auditing interfaces...</option>`;
@@ -442,8 +450,122 @@ document.getElementById('btn-create-ap').addEventListener('click', async () => {
         citySelect.innerHTML = locations.map(l => {
             return `<option value="${l.name}">${l.name}</option>`;
         }).join('');
+
+        // Auto populate fields for first location
+        updateDefaultStackFields();
+        
+        // Sync security options with default selected interface
+        updateSecurityOptionsForSelectedInterface();
     } catch {}
 });
+
+function updateDefaultStackFields() {
+    const citySelect = document.getElementById('stack-vpn-city');
+    const locationVal = citySelect.value;
+    if (locationVal && locationVal !== 'Loading locations...') {
+        // Lowercase slugified representation (e.g. afghanistan or united_states)
+        const newSlug = locationVal.toLowerCase()
+            .replace(/[^a-z0-9]/g, '_')
+            .replace(/_+/g, '_')
+            .replace(/^_+|_+$/g, '');
+            
+        // SSID: AP_{VPN location} replacing spaces with underscores
+        const newSsid = 'AP_' + locationVal.replace(/\s+/g, '_')
+            .replace(/[^a-zA-Z0-9_]/g, '')
+            .replace(/_+/g, '_')
+            .replace(/^_+|_+$/g, '');
+
+        const idInput = document.getElementById('stack-id');
+        const ssidInput = document.getElementById('stack-ssid');
+
+        // Only overwrite if input is empty or matches last auto-generated value
+        if (idInput.value === '' || idInput.value === lastAutoProfileId) {
+            idInput.value = newSlug;
+            lastAutoProfileId = newSlug;
+        }
+
+        if (ssidInput.value === '' || ssidInput.value === lastAutoSsid) {
+            ssidInput.value = newSsid;
+            lastAutoSsid = newSsid;
+        }
+    }
+}
+
+document.getElementById('stack-vpn-city').addEventListener('change', updateDefaultStackFields);
+
+function updateSecurityOptionsForSelectedInterface() {
+    const ifaceSelect = document.getElementById('stack-iface');
+    const ifaceName = ifaceSelect.value;
+    const ifaceObj = interfaces.find(i => i.name === ifaceName);
+    const securitySelect = document.getElementById('stack-security');
+    if (!securitySelect) return;
+    
+    const wpa3Opt = securitySelect.querySelector('option[value="wpa3"]');
+    const mixedOpt = securitySelect.querySelector('option[value="mixed"]');
+    
+    if (ifaceObj && !ifaceObj.supports_wpa3) {
+        if (wpa3Opt) {
+            wpa3Opt.disabled = true;
+            wpa3Opt.text = "WPA3 (Modern SAE) - Unsupported by adapter";
+        }
+        if (mixedOpt) {
+            mixedOpt.disabled = true;
+            mixedOpt.text = "WPA2/WPA3 Mixed - Unsupported by adapter";
+        }
+        
+        if (securitySelect.value === 'wpa3' || securitySelect.value === 'mixed') {
+            securitySelect.value = 'wpa2';
+            handleSecurityChange();
+        }
+    } else {
+        if (wpa3Opt) {
+            wpa3Opt.disabled = false;
+            wpa3Opt.text = "WPA3 (Modern SAE)";
+        }
+        if (mixedOpt) {
+            mixedOpt.disabled = false;
+            mixedOpt.text = "WPA2/WPA3 Mixed";
+        }
+    }
+}
+
+function handleSecurityChange() {
+    const securitySelect = document.getElementById('stack-security');
+    if (!securitySelect) return;
+    const security = securitySelect.value;
+    
+    const passwordRow = document.getElementById('password-form-row');
+    const passwordInput = document.getElementById('stack-pass');
+    const passwordHelp = document.getElementById('password-help');
+    
+    if (!passwordRow || !passwordInput) return;
+    
+    if (security === 'none') {
+        passwordRow.style.display = 'none';
+        passwordInput.required = false;
+        passwordInput.removeAttribute('minlength');
+        passwordInput.value = '';
+    } else {
+        passwordRow.style.display = 'flex';
+        passwordInput.required = true;
+        passwordInput.minlength = 8;
+        
+        if (passwordHelp) {
+            if (security === 'wpa3') {
+                passwordHelp.innerText = "WPA3 SAE requires 8-63 characters. Special characters are fully supported.";
+            } else if (security === 'wpa2') {
+                passwordHelp.innerText = "WPA2 CCMP requires 8-63 characters. Special characters are fully supported.";
+            } else if (security === 'wpa') {
+                passwordHelp.innerText = "WPA Legacy (WPA-PSK) requires 8-63 characters. Special characters are fully supported.";
+            } else {
+                passwordHelp.innerText = "Mixed WPA2/WPA3 requires 8-63 characters. Special characters are fully supported.";
+            }
+        }
+    }
+}
+
+document.getElementById('stack-iface').addEventListener('change', updateSecurityOptionsForSelectedInterface);
+document.getElementById('stack-security').addEventListener('change', handleSecurityChange);
 
 document.getElementById('btn-close-stack-modal').addEventListener('click', () => {
     document.getElementById('modal-stack').classList.remove('open');
@@ -465,9 +587,27 @@ document.getElementById('form-stack').addEventListener('submit', async (e) => {
     const id = document.getElementById('stack-id').value.trim();
     const ap_iface = document.getElementById('stack-iface').value;
     const ssid = document.getElementById('stack-ssid').value.trim();
-    const password = document.getElementById('stack-pass').value.trim();
+    const ap_security = document.getElementById('stack-security').value;
     const vpn_type = document.getElementById('stack-vpn-type').value;
     const vpn_city = document.getElementById('stack-vpn-city').value;
+    
+    let password = '';
+    if (ap_security !== 'none') {
+        password = document.getElementById('stack-pass').value;
+        if (password.length < 8) {
+            showToast('WiFi Password must be at least 8 characters.', 'error');
+            return;
+        }
+        if (password.length > 63) {
+            showToast('WiFi Password must be 63 characters or less.', 'error');
+            return;
+        }
+        const asciiPrintableRegex = /^[\x20-\x7E]+$/;
+        if (!asciiPrintableRegex.test(password)) {
+            showToast('WiFi Password must only contain printable ASCII characters (alphanumerics, spaces, and punctuation).', 'error');
+            return;
+        }
+    }
     
     // Optional settings
     const subnet_val = document.getElementById('stack-subnet').value.trim();
@@ -481,7 +621,8 @@ document.getElementById('form-stack').addEventListener('submit', async (e) => {
         password,
         ap_iface,
         vpn_type,
-        vpn_city
+        vpn_city,
+        ap_security
     };
 
     if (subnet_val) payload.subnet = subnet_val;

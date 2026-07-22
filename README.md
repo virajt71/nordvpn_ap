@@ -161,3 +161,6 @@ If you prefer terminal-only operation, you can still run the legacy setup script
 ./startup.sh
 ```
 Follow the interactive prompts to create, edit, or launch country profiles from your terminal shell. Refer to `startup.sh usage` by running `./startup.sh --help`.
+
+understanding wifi Standards 802.11 
+https://www.netia.pl/pl/blog/standardy-wi-fi-802-11-a-b-g-n-ac-ax

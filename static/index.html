@@ -158,27 +158,13 @@
                 <input type="hidden" id="stack-edit-mode" value="false">
                 <div class="form-row">
                     <div class="form-group">
-                        <label for="stack-id">Profile Name / ID</label>
-                        <input type="text" id="stack-id" placeholder="e.g. us_ap" required pattern="^[a-z0-9_-]+$" title="Lowercase letters, numbers, dash, underscore only">
-                    </div>
-                    <div class="form-group">
-                        <label for="stack-iface">WiFi Interface</label>
-                        <select id="stack-iface" required>
+                        <label for="stack-vpn-city">VPN Location</label>
+                        <select id="stack-vpn-city" required>
                             <!-- Populated dynamically -->
+                            <option value="United States">United States</option>
+                            <option value="Germany">Germany</option>
                         </select>
                     </div>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label for="stack-ssid">SSID (WiFi Name)</label>
-                        <input type="text" id="stack-ssid" placeholder="e.g. Protected_WiFi" required>
-                    </div>
-                    <div class="form-group">
-                        <label for="stack-pass">WPA2 Password</label>
-                        <input type="password" id="stack-pass" placeholder="Minimum 8 characters" required minlength="8">
-                    </div>
-                </div>
-                <div class="form-row">
                     <div class="form-group">
                         <label for="stack-vpn-type">VPN Protocol</label>
                         <select id="stack-vpn-type" required>
@@ -186,13 +172,42 @@
                             <option value="openvpn">OpenVPN</option>
                         </select>
                     </div>
+                </div>
+                <div class="form-row">
                     <div class="form-group">
-                        <label for="stack-vpn-city">VPN Location</label>
-                        <select id="stack-vpn-city" required>
+                        <label for="stack-id">Profile Name / ID</label>
+                        <input type="text" id="stack-id" placeholder="e.g. us_ap" required pattern="^[a-z0-9_-]+$" title="Lowercase letters, numbers, dash, underscore only">
+                    </div>
+                    <div class="form-group">
+                        <label for="stack-ssid">SSID (WiFi Name)</label>
+                        <input type="text" id="stack-ssid" placeholder="e.g. Protected_WiFi" required>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="stack-iface">WiFi Interface</label>
+                        <select id="stack-iface" required>
                             <!-- Populated dynamically -->
-                            <option value="United States">United States</option>
-                            <option value="Germany">Germany</option>
                         </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="stack-security">WiFi Security</label>
+                        <select id="stack-security" required>
+                            <option value="wpa2">WPA2 (Recommended)</option>
+                            <option value="wpa3">WPA3 (Modern SAE)</option>
+                            <option value="mixed">WPA2/WPA3 Mixed</option>
+                            <option value="wpa">WPA (Legacy)</option>
+                            <option value="none">None (Open Network)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row" id="password-form-row">
+                    <div class="form-group">
+                        <label for="stack-pass">WiFi Password</label>
+                        <input type="password" id="stack-pass" placeholder="Minimum 8 characters" required minlength="8">
+                        <small id="password-help" class="form-help" style="color: var(--color-text-muted); font-size: 11px; margin-top: 5px; display: block;">
+                            Recommended: 8-63 characters, mix of uppercase, lowercase, numbers, and symbols.
+                        </small>
                     </div>
                 </div>
                 <div class="accordion-header" id="adv-settings-toggle">
