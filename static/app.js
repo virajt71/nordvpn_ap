@@ -128,11 +128,35 @@ async function checkSystemHealth() {
                     warningBanner.style.display = 'none';
                 }
             }
+
+            if (typeof res.total_stacks === 'number') {
+                const statActive = document.getElementById('stat-active-stacks');
+                if (statActive) {
+                    statActive.innerText = `${res.active_stacks} / ${res.total_stacks}`;
+                }
+            }
         }
     } catch {
         const apiDot = document.getElementById('api-status-dot');
         apiDot.className = 'pulse-dot red';
         document.getElementById('api-status-text').innerText = 'Offline / Error';
+    }
+}
+
+function updateTelemetryStats() {
+    const total = stacks.length;
+    const active = stacks.filter(s => s.status === 'running').length;
+    const vpnConnected = stacks.filter(s => s.vpn_ip).length;
+
+    const statActive = document.getElementById('stat-active-stacks');
+    if (statActive) statActive.innerText = `${active} / ${total}`;
+
+    const statVpn = document.getElementById('stat-vpn-tunnels');
+    if (statVpn) statVpn.innerText = total > 0 ? `${vpnConnected} Connected` : '0 Connected';
+
+    const statHw = document.getElementById('stat-hw-ifaces');
+    if (statHw) {
+        statHw.innerText = interfaces.length > 0 ? `${interfaces.length} Discovered` : 'Scanning...';
     }
 }
 
@@ -151,6 +175,7 @@ function connectStackSocket() {
             const data = JSON.parse(ev.data);
             if (!Array.isArray(data)) return;
             stacks = data;
+            updateTelemetryStats();
             // Repaint only when dashboard is active to avoid clobbering other views.
             if (document.getElementById('view-dashboard').classList.contains('active')) {
                 renderStacks();
@@ -175,7 +200,11 @@ async function loadDashboard() {
     `;
 
     try {
+        if (interfaces.length === 0) {
+            interfaces = await apiRequest('/api/wifi/interfaces').catch(() => []);
+        }
         stacks = await apiRequest('/api/stacks') || [];
+        updateTelemetryStats();
         renderStacks();
         connectStackSocket();
     } catch {
@@ -189,6 +218,7 @@ async function loadDashboard() {
 }
 
 function renderStacks() {
+    updateTelemetryStats();
     const container = document.getElementById('stacks-container');
     if (stacks.length === 0) {
         container.innerHTML = `
@@ -212,6 +242,10 @@ function renderStacks() {
                 <span class="vpn-box-ip" style="color: var(--color-danger);">--</span>
                </div>`;
 
+        const auto12hBadge = s.auto_reconnect_12h
+            ? `<div class="card-12h-badge"><i class="fa-solid fa-clock-rotate-left"></i> 12h Auto-Reconnect Enabled</div>`
+            : '';
+
         return `
             <div class="glass-panel stack-card ${badgeClass}">
                 <div class="stack-header">
@@ -219,7 +253,7 @@ function renderStacks() {
                         <h3>${s.ssid}</h3>
                         <span class="stack-id-tag">id: ${s.id}</span>
                     </div>
-                    <span class="badge ${badgeClass}">${s.status}</span>
+                    <span class="badge ${badgeClass}">${s.status.toUpperCase()}</span>
                 </div>
                 <div class="stack-details">
                     <div class="detail-item">
@@ -239,6 +273,7 @@ function renderStacks() {
                         <span class="value">${s.vpn_city} (${s.vpn_type})</span>
                     </div>
                     ${vpnIpSection}
+                    ${auto12hBadge}
                 </div>
                 <div class="stack-actions">
                     <button class="action-btn play" onclick="startStack('${s.id}')" title="Start AP Stack">
@@ -249,6 +284,9 @@ function renderStacks() {
                     </button>
                     <button class="action-btn sync" onclick="restartStack('${s.id}')" title="Restart AP Stack">
                         <i class="fa-solid fa-rotate"></i>
+                    </button>
+                    <button class="action-btn edit" onclick="openEditStackModal('${s.id}')" title="Edit AP Stack">
+                        <i class="fa-solid fa-pen-to-square"></i>
                     </button>
                     <button class="action-btn terminal" onclick="openLogsModal('${s.id}')" title="View Logs">
                         <i class="fa-solid fa-terminal"></i>
@@ -450,11 +488,19 @@ document.getElementById('form-credentials').addEventListener('submit', async (e)
     } catch {}
 });
 
-// ─── Create AP Modal Handlers ────────────────────────────────────────────────
+// ─── Create & Edit AP Modal Handlers ─────────────────────────────────────────
 
 document.getElementById('btn-create-ap').addEventListener('click', async () => {
-    // Reset form and tracked auto values
+    // Reset form and set create mode
     document.getElementById('form-stack').reset();
+    document.getElementById('stack-edit-mode').value = 'false';
+    document.getElementById('modal-title').innerText = 'Create Access Point';
+    document.getElementById('btn-save-stack').innerText = 'Create Stack';
+
+    // Enable VPN location & Profile ID fields
+    document.getElementById('stack-vpn-city').disabled = false;
+    document.getElementById('stack-id').disabled = false;
+
     lastAutoProfileId = '';
     lastAutoSsid = '';
     handleSecurityChange();
@@ -492,6 +538,61 @@ document.getElementById('btn-create-ap').addEventListener('click', async () => {
     } catch {}
 });
 
+async function openEditStackModal(id) {
+    const stack = stacks.find(s => s.id === id);
+    if (!stack) return;
+
+    document.getElementById('stack-edit-mode').value = 'true';
+    document.getElementById('modal-title').innerText = `Edit Access Point (${id})`;
+    document.getElementById('btn-save-stack').innerText = 'Save Changes';
+
+    const ifaceSelect = document.getElementById('stack-iface');
+    const citySelect = document.getElementById('stack-vpn-city');
+
+    try {
+        if (interfaces.length === 0) {
+            interfaces = await apiRequest('/api/wifi/interfaces') || [];
+        }
+        if (locations.length === 0) {
+            locations = await apiRequest('/api/vpn/locations') || [];
+        }
+
+        ifaceSelect.innerHTML = interfaces.map(i => {
+            const disabled = !i.supports_ap ? 'disabled' : '';
+            const suffix = !i.supports_ap ? ' (No AP support)' : '';
+            const sel = i.name === stack.ap_iface ? 'selected' : '';
+            return `<option value="${i.name}" ${disabled} ${sel}>${i.name} - ${i.vendor_model}${suffix}</option>`;
+        }).join('');
+
+        citySelect.innerHTML = locations.map(l => {
+            const sel = l.name === stack.vpn_city ? 'selected' : '';
+            return `<option value="${l.name}" ${sel}>${l.name}</option>`;
+        }).join('');
+    } catch {}
+
+    // Disable VPN City & Profile ID (per requirement: edit everything except VPN location)
+    citySelect.disabled = true;
+    document.getElementById('stack-id').disabled = true;
+
+    // Prefill fields
+    document.getElementById('stack-id').value = stack.id;
+    document.getElementById('stack-ssid').value = stack.ssid;
+    document.getElementById('stack-pass').value = stack.password;
+    document.getElementById('stack-security').value = stack.ap_security;
+    document.getElementById('stack-vpn-type').value = stack.vpn_type;
+    document.getElementById('stack-subnet').value = stack.subnet;
+    document.getElementById('stack-routing-table').value = stack.routing_table;
+    document.getElementById('stack-channel').value = stack.ap_channel;
+    document.getElementById('stack-hw-mode').value = stack.ap_hw_mode;
+    document.getElementById('stack-auto-reconnect-12h').checked = !!stack.auto_reconnect_12h;
+
+    handleSecurityChange();
+    updateSecurityOptionsForSelectedInterface();
+    updateHwModeOptions();
+
+    document.getElementById('modal-stack').classList.add('open');
+}
+
 // Normalize a location label into a clean identifier token.
 function slugifyLocation(name, lowercase = true) {
     const s = lowercase ? name.toLowerCase() : name;
@@ -499,6 +600,9 @@ function slugifyLocation(name, lowercase = true) {
 }
 
 function updateDefaultStackFields() {
+    // Only update defaults if creating a new stack
+    if (document.getElementById('stack-edit-mode').value === 'true') return;
+
     const citySelect = document.getElementById('stack-vpn-city');
     const locationVal = citySelect.value;
     if (locationVal && locationVal !== 'Loading locations...') {
@@ -619,12 +723,14 @@ document.getElementById('adv-settings-toggle').addEventListener('click', () => {
 document.getElementById('form-stack').addEventListener('submit', async (e) => {
     e.preventDefault();
 
+    const isEditMode = document.getElementById('stack-edit-mode').value === 'true';
     const id = document.getElementById('stack-id').value.trim();
     const ap_iface = document.getElementById('stack-iface').value;
     const ssid = document.getElementById('stack-ssid').value.trim();
     const ap_security = document.getElementById('stack-security').value;
     const vpn_type = document.getElementById('stack-vpn-type').value;
     const vpn_city = document.getElementById('stack-vpn-city').value;
+    const auto_reconnect_12h = document.getElementById('stack-auto-reconnect-12h').checked;
     
     let password = '';
     if (ap_security !== 'none') {
@@ -657,7 +763,8 @@ document.getElementById('form-stack').addEventListener('submit', async (e) => {
         ap_iface,
         vpn_type,
         vpn_city,
-        ap_security
+        ap_security,
+        auto_reconnect_12h
     };
 
     if (subnet_val) payload.subnet = subnet_val;
@@ -665,17 +772,30 @@ document.getElementById('form-stack').addEventListener('submit', async (e) => {
     if (chan_val) payload.ap_channel = parseInt(chan_val);
     if (hw_val) payload.ap_hw_mode = hw_val;
 
-    showToast(`Creating AP configuration '${id}'...`);
-    try {
-        await apiRequest('/api/stacks', {
-            method: 'POST',
-            body: JSON.stringify(payload)
-        });
-        showToast(`Stack '${id}' created successfully. Start it from dashboard.`, 'success');
-        document.getElementById('modal-stack').classList.remove('open');
-        document.getElementById('form-stack').reset();
-        switchView('dashboard');
-    } catch {}
+    if (isEditMode) {
+        showToast(`Updating AP configuration '${id}'...`);
+        try {
+            await apiRequest(`/api/stacks/${id}`, {
+                method: 'PATCH',
+                body: JSON.stringify(payload)
+            });
+            showToast(`Stack '${id}' updated successfully.`, 'success');
+            document.getElementById('modal-stack').classList.remove('open');
+            loadDashboard();
+        } catch {}
+    } else {
+        showToast(`Creating AP configuration '${id}'...`);
+        try {
+            await apiRequest('/api/stacks', {
+                method: 'POST',
+                body: JSON.stringify(payload)
+            });
+            showToast(`Stack '${id}' created successfully. Start it from dashboard.`, 'success');
+            document.getElementById('modal-stack').classList.remove('open');
+            document.getElementById('form-stack').reset();
+            loadDashboard();
+        } catch {}
+    }
 });
 
 // Initialize dashboard health checks & timers

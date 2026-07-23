@@ -18,6 +18,10 @@ pub struct Stack {
     pub ap_hw_mode: String,
     pub ap_channel_width: u8,
     pub ap_security: String,
+    #[serde(default)]
+    pub auto_reconnect_12h: bool,
+    #[serde(default)]
+    pub last_reconnect_at: u64,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -202,6 +206,8 @@ mod tests {
                 ap_hw_mode: "g".to_string(),
                 ap_channel_width: 20,
                 ap_security: "wpa2".to_string(),
+                auto_reconnect_12h: false,
+                last_reconnect_at: 0,
             },
             Stack {
                 id: "test2".to_string(),
@@ -216,6 +222,8 @@ mod tests {
                 ap_hw_mode: "g".to_string(),
                 ap_channel_width: 20,
                 ap_security: "wpa2".to_string(),
+                auto_reconnect_12h: false,
+                last_reconnect_at: 0,
             },
         ];
         let (subnet, table) = manager.allocate_resources(&stacks);

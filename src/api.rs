@@ -57,6 +57,7 @@ pub struct CreateStackInput {
     pub ap_hw_mode: Option<String>,
     pub ap_channel_width: Option<u8>,
     pub ap_security: Option<String>,
+    pub auto_reconnect_12h: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,20 +73,20 @@ const CONTAINER_ROLES: &[&str] = &["gluetun", "adguard", "wifi-ap"];
 fn aggregate_status(state: &AppState, id: &str) -> (Vec<ContainerStatusDto>, String) {
     let mut containers = Vec::new();
     let mut running = 0;
-    let mut present = 0;
+    let mut _present = 0;
     for role in CONTAINER_ROLES {
         if let Some(st) = state.docker_manager.inspect_container_status(&format!("{}-{}", role, id)) {
-            present += 1;
+            _present += 1;
             if st == "running" { running += 1; }
             containers.push(ContainerStatusDto { name: role.to_string(), status: st });
         }
     }
     let status = if running == CONTAINER_ROLES.len() {
         "running"
-    } else if present > 0 {
-        "starting"
-    } else {
+    } else if running == 0 {
         "stopped"
+    } else {
+        "starting"
     };
     (containers, status.to_string())
 }
@@ -130,7 +131,61 @@ fn collision_error(existing: &Stack, candidate: &Stack) -> Option<String> {
     }
 }
 
+async fn add_security_headers(
+    req: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> axum::response::Response {
+    let mut response = next.run(req).await;
+    let headers = response.headers_mut();
+    headers.insert("X-Content-Type-Options", axum::http::HeaderValue::from_static("nosniff"));
+    headers.insert("X-Frame-Options", axum::http::HeaderValue::from_static("DENY"));
+    headers.insert("X-XSS-Protection", axum::http::HeaderValue::from_static("1; mode=block"));
+    response
+}
+
+pub fn start_12h_reconnect_scheduler(state: AppState) {
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            interval.tick().await;
+            let now = match std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+                Ok(d) => d.as_secs(),
+                Err(_) => continue,
+            };
+
+            let mut stacks_to_restart = Vec::new();
+            if let Ok(stacks) = state.config_manager.load_stacks() {
+                for stack in stacks {
+                    if stack.auto_reconnect_12h {
+                        let (_, status) = aggregate_status(&state, &stack.id);
+                        if status == "running" {
+                            let elapsed = now.saturating_sub(stack.last_reconnect_at);
+                            if elapsed >= 12 * 3600 {
+                                stacks_to_restart.push(stack.id);
+                            }
+                        }
+                    }
+                }
+            }
+
+            for id in stacks_to_restart {
+                tracing::info!("12-hour auto-reconnect triggering for stack: {}", id);
+                let _ = state.docker_manager.restart_stack(&id);
+                if let Ok(mut stacks) = state.config_manager.load_stacks() {
+                    if let Some(s) = stacks.iter_mut().find(|x| x.id == id) {
+                        s.last_reconnect_at = now;
+                        let _ = state.config_manager.save_stacks(&stacks);
+                    }
+                }
+                publish_stacks(&state);
+            }
+        }
+    });
+}
+
 pub fn create_router(state: AppState) -> Router {
+    start_12h_reconnect_scheduler(state.clone());
+
     let api_routes = Router::new()
         // Stack routes
         .route("/stacks", get(list_stacks).post(create_stack))
@@ -149,6 +204,7 @@ pub fn create_router(state: AppState) -> Router {
     Router::new()
         .route("/ws/stacks", get(stream_stacks))
         .nest("/api", api_routes)
+        .layer(axum::middleware::from_fn(add_security_headers))
         .with_state(state)
 }
 
@@ -163,7 +219,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     // Send current snapshot immediately on connect.
     let snap = build_snapshot(&state);
     if let Ok(msg) = serde_json::to_string(&snap) {
-        let _ = socket.send(Message::Text(msg.into())).await;
+        let _ = socket.send(Message::Text(msg)).await;
     }
 
     let mut rx = state.stack_tx.subscribe();
@@ -174,7 +230,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                     Ok(m) => m,
                     Err(_) => continue,
                 };
-                if socket.send(Message::Text(msg.into())).await.is_err() {
+                if socket.send(Message::Text(msg)).await.is_err() {
                     break; // client gone
                 }
             }
@@ -235,6 +291,8 @@ async fn create_stack(
         }
     }
 
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+
     let new_stack = Stack {
         id: input.id,
         ssid: input.ssid,
@@ -248,6 +306,8 @@ async fn create_stack(
         ap_hw_mode,
         ap_channel_width,
         ap_security: input.ap_security.unwrap_or_else(|| "wpa2".to_string()),
+        auto_reconnect_12h: input.auto_reconnect_12h.unwrap_or(false),
+        last_reconnect_at: now,
     };
 
     // Check collisions
@@ -315,18 +375,18 @@ async fn update_stack(
 
     let mut updated = stacks[idx].clone();
     
-    // Update config fields
+    // Update config fields (keep vpn_city unchanged per task requirement)
     updated.ssid = input.ssid;
     updated.password = input.password;
     updated.ap_iface = input.ap_iface;
     updated.vpn_type = input.vpn_type;
-    updated.vpn_city = input.vpn_city;
     if let Some(sub) = input.subnet { updated.subnet = sub; }
     if let Some(rt) = input.routing_table { updated.routing_table = rt; }
     if let Some(ch) = input.ap_channel { updated.ap_channel = ch; }
     if let Some(hw) = input.ap_hw_mode { updated.ap_hw_mode = hw; }
     if let Some(width) = input.ap_channel_width { updated.ap_channel_width = width; }
     if let Some(sec) = input.ap_security { updated.ap_security = sec; }
+    if let Some(auto_rec) = input.auto_reconnect_12h { updated.auto_reconnect_12h = auto_rec; }
 
     // Re-verify collisions (excluding itself)
     for (i, s) in stacks.iter().enumerate() {
@@ -342,10 +402,15 @@ async fn update_stack(
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Compose generation failed: {}", e) }))).into_response();
     }
 
-    // If running, warn that stack needs restart
     stacks[idx] = updated.clone();
     if let Err(e) = state.config_manager.save_stacks(&stacks) {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response();
+    }
+
+    // If stack was running, restart containers to apply new config
+    let (_, status) = aggregate_status(&state, &id);
+    if status == "running" {
+        let _ = state.docker_manager.restart_stack(&id);
     }
 
     publish_stacks(&state);
@@ -380,11 +445,15 @@ async fn delete_stack(Path(id): Path<String>, State(state): State<AppState>) -> 
 // ─── Stack Actions ───────────────────────────────────────────────────────────
 
 async fn start_stack(Path(id): Path<String>, State(state): State<AppState>) -> impl IntoResponse {
-    // Regenerate compose config on start to pick up template or credential updates
-    if let Ok(stacks) = state.config_manager.load_stacks() {
-        if let Some(s) = stacks.into_iter().find(|x| x.id == id) {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+
+    // Regenerate compose config on start to pick up template or credential updates & update timestamp
+    if let Ok(mut stacks) = state.config_manager.load_stacks() {
+        if let Some(s) = stacks.iter_mut().find(|x| x.id == id) {
+            s.last_reconnect_at = now;
             let creds = state.config_manager.load_credentials();
-            let _ = state.docker_manager.generate_compose_file(&s, &creds);
+            let _ = state.docker_manager.generate_compose_file(s, &creds);
+            let _ = state.config_manager.save_stacks(&stacks);
         }
     }
 
@@ -408,6 +477,14 @@ async fn stop_stack(Path(id): Path<String>, State(state): State<AppState>) -> im
 }
 
 async fn restart_stack(Path(id): Path<String>, State(state): State<AppState>) -> impl IntoResponse {
+    let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if let Ok(mut stacks) = state.config_manager.load_stacks() {
+        if let Some(s) = stacks.iter_mut().find(|x| x.id == id) {
+            s.last_reconnect_at = now;
+            let _ = state.config_manager.save_stacks(&stacks);
+        }
+    }
+
     match state.docker_manager.restart_stack(&id) {
         Ok(out) => {
             publish_stacks(&state);
@@ -508,9 +585,23 @@ async fn get_health(State(state): State<AppState>) -> impl IntoResponse {
     let docker_output = Command::new("docker").arg("ps").output();
     let docker_ok = docker_output.is_ok() && docker_output.unwrap().status.success();
 
+    let (total_stacks, active_stacks) = match state.config_manager.load_stacks() {
+        Ok(stacks) => {
+            let total = stacks.len();
+            let active = stacks.iter().filter(|s| {
+                let (_, status) = aggregate_status(&state, &s.id);
+                status == "running"
+            }).count();
+            (total, active)
+        }
+        Err(_) => (0, 0),
+    };
+
     Json(json!({
         "status": "healthy",
         "docker_socket_reachable": docker_ok,
-        "host_project_dir_defaulted": state.host_project_dir_defaulted
+        "host_project_dir_defaulted": state.host_project_dir_defaulted,
+        "total_stacks": total_stacks,
+        "active_stacks": active_stacks
     }))
 }

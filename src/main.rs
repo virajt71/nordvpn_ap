@@ -38,21 +38,19 @@ async fn main() {
     }
     info!("Project Root detected: {:?}", project_root);
 
-    // Get HOST_PROJECT_DIR environment variable
+    // Get HOST_PROJECT_DIR environment variable (with docker inspect auto-detection fallback)
     let mut host_project_dir_defaulted = false;
     let host_project_dir = match env::var("HOST_PROJECT_DIR") {
         Ok(dir) => {
-            info!("HOST_PROJECT_DIR set to: {}", dir);
-            dir
+            if dir.trim().is_empty() {
+                auto_detect_host_dir(&mut host_project_dir_defaulted, &project_root)
+            } else {
+                info!("HOST_PROJECT_DIR set to: {}", dir);
+                dir
+            }
         }
         Err(_) => {
-            host_project_dir_defaulted = true;
-            let pwd = project_root.to_string_lossy().to_string();
-            warn!(
-                "HOST_PROJECT_DIR not set. Defaulting to current project root: {}",
-                pwd
-            );
-            pwd
+            auto_detect_host_dir(&mut host_project_dir_defaulted, &project_root)
         }
     };
 
@@ -107,4 +105,32 @@ async fn main() {
         .expect("Failed to bind TcpListener");
 
     axum::serve(listener, app).await.expect("Axum server run failed");
+}
+
+fn auto_detect_host_dir(defaulted: &mut bool, project_root: &std::path::Path) -> String {
+    // Try to query docker inspect of the ap-manager container to find its host mount directory
+    let output = std::process::Command::new("docker")
+        .args([
+            "inspect",
+            "--format",
+            "{{ range .Mounts }}{{ if eq .Destination \"/app\" }}{{ .Source }}{{ end }}{{ end }}",
+            "ap-manager",
+        ])
+        .output();
+        
+    if let Ok(out) = output {
+        let path = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        if !path.is_empty() {
+            info!("Auto-detected HOST_PROJECT_DIR from docker inspect: {}", path);
+            return path;
+        }
+    }
+
+    *defaulted = true;
+    let pwd = project_root.to_string_lossy().to_string();
+    warn!(
+        "HOST_PROJECT_DIR not set and auto-detection failed. Defaulting to current project root: {}",
+        pwd
+    );
+    pwd
 }
