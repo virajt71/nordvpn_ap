@@ -21,28 +21,66 @@ const navItems = {
     interfaces: document.getElementById('btn-nav-interfaces')
 };
 
-// Notification helper
+// Notifications State
+let notifications = [];
+
 function showToast(message, type = 'info') {
-    const container = document.getElementById('notification-container');
-    const toast = document.createElement('div');
-    toast.className = `toast ${type}`;
+    const notification = {
+        id: Date.now(),
+        message,
+        type,
+        time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+        unread: true
+    };
+    notifications.unshift(notification);
+    renderNotifications();
+}
+
+function renderNotifications() {
+    const badge = document.getElementById('notification-badge');
+    const list = document.getElementById('notification-list');
     
-    let iconClass = 'fa-circle-info';
-    if (type === 'success') iconClass = 'fa-circle-check';
-    if (type === 'error') iconClass = 'fa-triangle-exclamation';
+    // Count unread
+    const unreadCount = notifications.filter(n => n.unread).length;
+    if (unreadCount > 0) {
+        badge.textContent = unreadCount;
+        badge.style.display = 'block';
+    } else {
+        badge.style.display = 'none';
+    }
     
-    toast.innerHTML = `
-        <i class="fa-solid ${iconClass}"></i>
-        <span>${message}</span>
-    `;
+    if (notifications.length === 0) {
+        list.innerHTML = '<div class="notification-empty">No new activity</div>';
+        return;
+    }
     
-    container.appendChild(toast);
+    list.innerHTML = notifications.map(n => {
+        let iconClass = 'fa-circle-info';
+        if (n.type === 'success') iconClass = 'fa-circle-check';
+        if (n.type === 'error') iconClass = 'fa-triangle-exclamation';
+        
+        return `
+            <div class="notification-item ${n.type} ${n.unread ? 'unread' : ''}" data-id="${n.id}">
+                <i class="fa-solid ${iconClass}"></i>
+                <div class="notification-item-text">
+                    ${n.message}
+                    <span class="notification-item-time">${n.time}</span>
+                </div>
+            </div>
+        `;
+    }).join('');
     
-    // Auto remove
-    setTimeout(() => {
-        toast.style.animation = 'slideIn 0.3s cubic-bezier(0.25, 0.8, 0.25, 1) reverse';
-        setTimeout(() => toast.remove(), 300);
-    }, 4000);
+    // Attach click listener to mark single notification as read on click
+    list.querySelectorAll('.notification-item').forEach(item => {
+        item.addEventListener('click', (e) => {
+            const id = parseInt(item.getAttribute('data-id'));
+            const notif = notifications.find(n => n.id === id);
+            if (notif) {
+                notif.unread = false;
+                renderNotifications();
+            }
+        });
+    });
 }
 
 // Fetch wrapper with authentication
@@ -814,6 +852,37 @@ function stopHealthCheck() {
         healthInterval = null;
     }
 }
+
+// Notification dropdown toggle
+document.getElementById('btn-notification-bell').addEventListener('click', (e) => {
+    e.stopPropagation();
+    const dropdown = document.getElementById('notification-dropdown');
+    const isVisible = dropdown.style.display === 'block';
+    
+    // Toggle
+    dropdown.style.display = isVisible ? 'none' : 'block';
+    
+    // If opening, mark all notifications as read
+    if (!isVisible) {
+        notifications.forEach(n => n.unread = false);
+        renderNotifications();
+    }
+});
+
+// Clear all notifications
+document.getElementById('btn-clear-notifications').addEventListener('click', (e) => {
+    e.stopPropagation();
+    notifications = [];
+    renderNotifications();
+});
+
+// Close notification dropdown when clicking outside
+document.addEventListener('click', (e) => {
+    const container = document.querySelector('.notification-bell-container');
+    if (container && !container.contains(e.target)) {
+        document.getElementById('notification-dropdown').style.display = 'none';
+    }
+});
 
 // Start application
 startHealthCheck();

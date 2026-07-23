@@ -93,9 +93,9 @@ async fn main() {
 
     // Address and listener setup
     let port = env::var("API_PORT")
-        .unwrap_or_else(|_| "8080".to_string())
+        .unwrap_or_else(|_| "42918".to_string())
         .parse::<u16>()
-        .unwrap_or(8080);
+        .unwrap_or(42918);
     
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     info!("Listening on {}", addr);

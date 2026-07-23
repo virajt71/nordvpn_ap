@@ -34,6 +34,6 @@ WORKDIR /app
 # Copy the compiled binary to /usr/local/bin so it's not hidden by volume mounts
 COPY --from=builder /usr/src/ap-manager/target/release/ap-manager /usr/local/bin/ap-manager
 
-EXPOSE 8080
+EXPOSE 42918
 
 ENTRYPOINT ["/usr/local/bin/ap-manager"]

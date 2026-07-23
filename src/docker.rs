@@ -240,29 +240,9 @@ impl DockerManager {
     }
 
     pub fn restart_stack(&self, id: &str) -> Result<String, String> {
-        let compose_path = self.get_stack_dir(id).join("docker-compose.yaml");
-        if !compose_path.exists() {
-            return Err("docker-compose.yaml not found.".to_string());
-        }
-
-        info!("Restarting docker compose for stack {}", id);
-        let output = Command::new("docker")
-            .args(["compose", "-f", &compose_path.to_string_lossy(), "restart"])
-            .output()
-            .map_err(|e| format!("Failed to run docker compose restart: {}", e))?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-
-        if !output.status.success() {
-            error!(
-                "Docker compose restart failed for stack {}:\nSTDOUT:\n{}\nSTDERR:\n{}",
-                id, stdout, stderr
-            );
-            return Err(format!("Docker Compose restart failed: {}", stderr));
-        }
-
-        Ok(stdout)
+        info!("Restarting stack {} via stop & start sequence", id);
+        let _ = self.stop_stack(id);
+        self.start_stack(id)
     }
 
     pub fn inspect_container_status(&self, container_name: &str) -> Option<String> {

@@ -118,7 +118,7 @@ docker compose up -d --build
 ```
 
 ### 3. Open the Dashboard
-Navigate your browser to `http://localhost:8080/`.
+Navigate your browser to `http://localhost:42918/`.
 - The dashboard automatically detects and lists your WiFi interfaces and audits their capabilities.
 - You can create, edit, start, stop, restart, delete, and view logs of all access point profiles directly from the Web UI.
 - Stack status (running/starting/stopped, VPN IP) updates live over the WebSocket — no manual refresh.

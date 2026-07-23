@@ -1,18 +1,24 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>NordVPN AP Manager</title>
+    <title>VPN AP Manager</title>
     <!-- Google Fonts: Outfit & Fira Code / Fira Sans for Technical Glassmorphism -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link
+        href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
     <!-- FontAwesome Icons -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <!-- Custom Style Sheet -->
     <link rel="stylesheet" href="/static/style.css">
+    <!-- SVG Favicon -->
+    <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%233b82f6' d='M12 2L4 5v6.09c0 5.05 3.41 9.76 8 10.91 4.59-1.15 8-5.86 8-10.91V5l-8-3zm0 16c-3.31 0-6-2.69-6-6h2c0 2.21 1.79 4 4 4s4-1.79 4-4h2c0 3.31-2.69 6-6 6zm3-6H9c0-1.66 1.34-3 3-3s3 1.34 3 3z'/%3E%3C/svg%3E">
 </head>
+
 <body>
     <div class="app-container">
         <!-- Sidebar / Navigation -->
@@ -20,7 +26,7 @@
             <div class="brand">
                 <i class="fa-solid fa-circle-nodes brand-icon"></i>
                 <div class="brand-text">
-                    <h1>NordAP</h1>
+                    <h1>VPN AP</h1>
                     <span>Orchestrator v1.0</span>
                 </div>
             </div>
@@ -52,6 +58,26 @@
                     <p class="subtitle" id="page-subtitle">Monitor and control your VPN network gateways</p>
                 </div>
                 <div class="header-actions">
+                    <!-- Notification Bell Container -->
+                    <div class="notification-bell-container">
+                        <button class="btn-icon-bell" id="btn-notification-bell" title="Notifications">
+                            <i class="fa-solid fa-bell"></i>
+                            <span class="notification-badge" id="notification-badge" style="display: none;">0</span>
+                        </button>
+                        <!-- Notification Dropdown Panel -->
+                        <div class="notification-dropdown glass-panel" id="notification-dropdown"
+                            style="display: none;">
+                            <div class="notification-header">
+                                <span>Activity Notifications</span>
+                                <button class="btn-clear-notifications" id="btn-clear-notifications" title="Clear All">
+                                    Clear All
+                                </button>
+                            </div>
+                            <div class="notification-list" id="notification-list">
+                                <div class="notification-empty">No new activity</div>
+                            </div>
+                        </div>
+                    </div>
                     <button class="btn btn-primary" id="btn-create-ap">
                         <i class="fa-solid fa-plus"></i> Create Access Point
                     </button>
@@ -64,7 +90,9 @@
                 <div class="alert-banner" id="env-warning-banner" style="display: none;">
                     <i class="fa-solid fa-triangle-exclamation" style="font-size: 20px;"></i>
                     <div>
-                        <strong>Configuration Warning:</strong> <code>HOST_PROJECT_DIR</code> is not set on the host. Sibling AP stacks will fail to build or mount volume paths correctly. Set it on the host and restart the orchestrator.
+                        <strong>Configuration Warning:</strong> <code>HOST_PROJECT_DIR</code> is not set on the host.
+                        Sibling AP stacks will fail to build or mount volume paths correctly. Set it on the host and
+                        restart the orchestrator.
                     </div>
                 </div>
 
@@ -115,7 +143,8 @@
                     <form class="settings-form" id="form-credentials">
                         <div class="form-group">
                             <label for="cred-wg-key">NordVPN WireGuard Private Key</label>
-                            <input type="password" id="cred-wg-key" placeholder="Enter WireGuard Private Key (for NordLynx)">
+                            <input type="password" id="cred-wg-key"
+                                placeholder="Enter WireGuard Private Key (for NordLynx)">
                             <small>Required if using Wireguard (NordLynx) protocol.</small>
                         </div>
                         <div class="form-row">
@@ -128,7 +157,8 @@
                                 <input type="password" id="cred-ovpn-pass" placeholder="Enter OpenVPN Service Password">
                             </div>
                         </div>
-                        <small class="row-help">Required if using OpenVPN protocol. Get these credentials from your NordVPN dashboard.</small>
+                        <small class="row-help">Required if using OpenVPN protocol. Get these credentials from your
+                            NordVPN dashboard.</small>
                         <div class="form-actions" style="margin-top: 20px;">
                             <button type="submit" class="btn btn-primary" id="btn-save-credentials">
                                 <i class="fa-solid fa-floppy-disk"></i> Save Credentials
@@ -202,7 +232,8 @@
                 <div class="form-row">
                     <div class="form-group">
                         <label for="stack-id">Profile Name / ID</label>
-                        <input type="text" id="stack-id" placeholder="e.g. us_ap" required pattern="^[a-z0-9_-]+$" title="Lowercase letters, numbers, dash, underscore only">
+                        <input type="text" id="stack-id" placeholder="e.g. us_ap" required pattern="^[a-z0-9_-]+$"
+                            title="Lowercase letters, numbers, dash, underscore only">
                     </div>
                     <div class="form-group">
                         <label for="stack-ssid">SSID (WiFi Name)</label>
@@ -230,8 +261,10 @@
                 <div class="form-row" id="password-form-row">
                     <div class="form-group">
                         <label for="stack-pass">WiFi Password</label>
-                        <input type="password" id="stack-pass" placeholder="Minimum 8 characters" required minlength="8">
-                        <small id="password-help" class="form-help" style="color: var(--color-text-muted); font-size: 11px; margin-top: 5px; display: block;">
+                        <input type="password" id="stack-pass" placeholder="Minimum 8 characters" required
+                            minlength="8">
+                        <small id="password-help" class="form-help"
+                            style="color: var(--color-text-muted); font-size: 11px; margin-top: 5px; display: block;">
                             Recommended: 8-63 characters, mix of uppercase, lowercase, numbers, and symbols.
                         </small>
                     </div>
@@ -244,7 +277,8 @@
                                 <input type="checkbox" id="stack-auto-reconnect-12h">
                                 <span class="toggle-slider"></span>
                             </label>
-                            <span class="toggle-label-text">Automatically disconnect & reconnect VPN every 12 hours</span>
+                            <span class="toggle-label-text">Automatically disconnect & reconnect VPN every 12
+                                hours</span>
                         </div>
                     </div>
                 </div>
@@ -303,7 +337,8 @@
                 <pre><code id="logs-output">Loading container logs...</code></pre>
             </div>
             <div class="terminal-footer">
-                <span class="logs-info"><i class="fa-solid fa-arrows-rotate"></i> Logs refresh automatically every 5s</span>
+                <span class="logs-info"><i class="fa-solid fa-arrows-rotate"></i> Logs refresh automatically every
+                    5s</span>
                 <button class="btn btn-secondary btn-small" id="btn-refresh-logs">Refresh Now</button>
             </div>
         </div>
@@ -311,9 +346,9 @@
 
 
 
-    <!-- Global Notification Banner -->
-    <div class="notification-container" id="notification-container"></div>
+
 
     <script src="/static/app.js"></script>
 </body>
+
 </html>
