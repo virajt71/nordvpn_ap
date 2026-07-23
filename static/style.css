@@ -1171,3 +1171,12 @@ input[type="submit"],
     font-size: 13px;
 }
 
+.input-with-button {
+    display: flex;
+    gap: 10px;
+}
+
+.input-with-button input {
+    flex: 1;
+}
+

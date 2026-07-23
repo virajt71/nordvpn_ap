@@ -526,6 +526,38 @@ document.getElementById('form-credentials').addEventListener('submit', async (e)
     } catch {}
 });
 
+// Fetch WireGuard Key via NordVPN Access Token
+document.getElementById('btn-fetch-wg-key').addEventListener('click', async () => {
+    const token = document.getElementById('cred-nordvpn-token').value.trim();
+    if (!token) {
+        showToast('Please enter a NordVPN Access Token first.', 'error');
+        return;
+    }
+    
+    showToast('Exchanging Access Token for WireGuard Private Key...');
+    try {
+        const res = await apiRequest('/api/credentials', {
+            method: 'PATCH',
+            body: JSON.stringify({ nordvpn_token: token })
+        });
+        
+        if (res && res.success) {
+            showToast('WireGuard Private Key successfully fetched and saved!', 'success');
+            document.getElementById('cred-nordvpn-token').value = '';
+            
+            if (res.wireguard_private_key) {
+                document.getElementById('cred-wg-key').value = res.wireguard_private_key;
+            }
+
+            loadCredentialsForm();
+        } else {
+            showToast(res.error || 'Failed to exchange token.', 'error');
+        }
+    } catch (err) {
+        showToast(err.message || 'Error occurred during token exchange.', 'error');
+    }
+});
+
 // ─── Create & Edit AP Modal Handlers ─────────────────────────────────────────
 
 document.getElementById('btn-create-ap').addEventListener('click', async () => {

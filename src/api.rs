@@ -65,6 +65,7 @@ pub struct UpdateCredentialsInput {
     pub openvpn_user: Option<String>,
     pub openvpn_password: Option<String>,
     pub wireguard_private_key: Option<String>,
+    pub nordvpn_token: Option<String>,
 }
 
 const CONTAINER_ROLES: &[&str] = &["gluetun", "adguard", "wifi-ap"];
@@ -539,11 +540,75 @@ async fn update_credentials(
     if let Some(pass) = input.openvpn_password { creds.openvpn_password = Some(pass); }
     if let Some(key) = input.wireguard_private_key { creds.wireguard_private_key = Some(key); }
 
+    // If an Access Token is provided, fetch the WireGuard private key via NordVPN API
+    if let Some(token) = input.nordvpn_token {
+        let token_str = token.trim();
+        if !token_str.is_empty() {
+            // Strip "token:" prefix if user pasted it directly
+            let clean_token = if token_str.starts_with("token:") {
+                &token_str[6..]
+            } else {
+                token_str
+            };
+
+            tracing::info!("Attempting to exchange NordVPN Access Token for WireGuard key...");
+            let curl_res = Command::new("curl")
+                .args([
+                    "-s",
+                    "-L",
+                    "--max-time",
+                    "10",
+                    "-H",
+                    "User-Agent: NordAP/1.0",
+                    "-u",
+                    &format!("token:{}", clean_token),
+                    "https://api.nordvpn.com/v1/users/services/credentials"
+                ])
+                .output();
+                
+            match curl_res {
+                Ok(out) => {
+                    let body_str = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    if out.status.success() {
+                        if let Ok(json_body) = serde_json::from_str::<serde_json::Value>(&body_str) {
+                            if let Some(key) = json_body.get("nordlynx_private_key").and_then(|k| k.as_str()) {
+                                tracing::info!("Successfully extracted WireGuard private key from token exchange.");
+                                creds.wireguard_private_key = Some(key.to_string());
+                            } else {
+                                // Extract API error if present
+                                let err_msg = json_body.get("errors")
+                                    .and_then(|e| e.get("message"))
+                                    .and_then(|m| m.as_str())
+                                    .unwrap_or("Response did not contain 'nordlynx_private_key'");
+                                tracing::error!("Token response did not contain private key. Response: {}", body_str);
+                                return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("NordVPN API Error: {}", err_msg) }))).into_response();
+                            }
+                        } else {
+                            tracing::error!("Failed to parse JSON response from NordVPN. Body: {}", body_str);
+                            return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("Invalid JSON response: {}", body_str) }))).into_response();
+                        }
+                    } else {
+                        let err_msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
+                        tracing::error!("Curl request failed. Stderr: {}", err_msg);
+                        return (StatusCode::BAD_REQUEST, Json(json!({ "error": format!("NordVPN API request failed: {}", err_msg) }))).into_response();
+                    }
+                }
+                Err(e) => {
+                    tracing::error!("Failed to execute curl: {}", e);
+                    return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": format!("Failed to run curl command: {}", e) }))).into_response();
+                }
+            }
+        }
+    }
+
     if let Err(e) = state.config_manager.save_credentials(&creds) {
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response();
     }
 
-    Json(json!({ "success": true })).into_response()
+    Json(json!({
+        "success": true,
+        "wireguard_private_key": creds.wireguard_private_key
+    })).into_response()
 }
 
 // ─── Utils Handlers ──────────────────────────────────────────────────────────

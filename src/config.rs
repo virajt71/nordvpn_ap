@@ -42,10 +42,25 @@ impl ConfigManager {
         if !data_dir.exists() {
             let _ = fs::create_dir_all(&data_dir);
         }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(&data_dir, fs::Permissions::from_mode(0o700));
+        }
         Self {
             data_dir,
             project_root: project_root.to_path_buf(),
         }
+    }
+
+    fn secure_write(&self, path: &Path, content: &str) -> Result<(), String> {
+        fs::write(path, content).map_err(|e| format!("Failed to write file {:?}: {}", path, e))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
+        }
+        Ok(())
     }
 
     fn stacks_path(&self) -> PathBuf {
@@ -71,8 +86,7 @@ impl ConfigManager {
         let path = self.stacks_path();
         let content = serde_json::to_string_pretty(stacks)
             .map_err(|e| format!("Failed to serialize stacks: {}", e))?;
-        fs::write(&path, content)
-            .map_err(|e| format!("Failed to write stacks.json: {}", e))
+        self.secure_write(&path, &content)
     }
 
     pub fn load_credentials(&self) -> Credentials {
@@ -133,8 +147,7 @@ impl ConfigManager {
         let path = self.credentials_path();
         let content = serde_json::to_string_pretty(creds)
             .map_err(|e| format!("Failed to serialize credentials: {}", e))?;
-        fs::write(&path, content)
-            .map_err(|e| format!("Failed to write credentials.json: {}", e))
+        self.secure_write(&path, &content)
     }
 
     /// Automatically allocate next available subnet and routing table ID
