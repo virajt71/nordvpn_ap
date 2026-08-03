@@ -93,9 +93,14 @@ impl DockerManager {
     volumes:
       - {host_stack_dir}/adguard-work:/opt/adguardhome/work
       - {host_stack_dir}/adguard-conf:/opt/adguardhome/conf
+    # Must join gluetun's netns as soon as it *starts* (netns exists then),
+    # NOT when it is healthy: gluetun's own healthcheck resolves DNS via
+    # 127.0.0.1:53, which is this AdGuard instance. Waiting for healthy
+    # creates a deadlock: gluetun can't be healthy without AdGuard, AdGuard
+    # won't start until gluetun is healthy -> VPN restart loop (DNS refused).
     depends_on:
       gluetun:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
 
   wifi-ap:
