@@ -37,9 +37,13 @@ services:
     volumes:
       - ./country/${COUNTRY}/adguard-work:/opt/adguardhome/work
       - ./country/${COUNTRY}/adguard-conf:/opt/adguardhome/conf
+    # Join gluetun's netns as soon as it *starts* (netns exists then), NOT when
+    # healthy: gluetun's healthcheck resolves DNS via 127.0.0.1:53 (this AdGuard
+    # instance). Waiting for healthy deadlocks: gluetun can't be healthy without
+    # AdGuard, AdGuard won't start until gluetun is healthy -> VPN restart loop.
     depends_on:
       gluetun:
-        condition: service_healthy
+        condition: service_started
     restart: unless-stopped
 
   wifi-ap:
