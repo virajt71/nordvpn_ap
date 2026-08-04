@@ -11,7 +11,10 @@ pub struct Stack {
     pub password: String,
     pub ap_iface: String,
     pub vpn_type: String, // "wireguard" or "openvpn"
-    pub vpn_city: String,  // e.g. "Chicago" or "Germany"
+    #[serde(default)]
+    pub vpn_country: String,
+    #[serde(default)]
+    pub vpn_city: Option<String>, // None = country-wide selection
     pub subnet: String,    // e.g. "192.168.60.0/24" (auto-allocated if empty)
     pub routing_table: u8, // e.g. 100 (auto-allocated if 0)
     pub ap_channel: u8,
@@ -212,7 +215,8 @@ mod tests {
                 password: "pass12345".to_string(),
                 ap_iface: "wlan0".to_string(),
                 vpn_type: "wireguard".to_string(),
-                vpn_city: "Chicago".to_string(),
+                vpn_country: "United States".to_string(),
+                vpn_city: Some("Chicago".to_string()),
                 subnet: "192.168.60.0/24".to_string(),
                 routing_table: 100,
                 ap_channel: 6,
@@ -228,7 +232,8 @@ mod tests {
                 password: "pass12345".to_string(),
                 ap_iface: "wlan1".to_string(),
                 vpn_type: "wireguard".to_string(),
-                vpn_city: "Detroit".to_string(),
+                vpn_country: "United States".to_string(),
+                vpn_city: Some("Detroit".to_string()),
                 subnet: "192.168.61.0/24".to_string(),
                 routing_table: 101,
                 ap_channel: 1,

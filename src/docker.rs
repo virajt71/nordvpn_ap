@@ -53,6 +53,18 @@ impl DockerManager {
         // Subnet calculation: find outbound subnet or default to 0.0.0.0/0
         let firewall_outbound_subnets = &stack.subnet;
 
+        let location_env = match &stack.vpn_city {
+            Some(city) if !city.is_empty() => format!("SERVER_CITIES={}", city),
+            _ => {
+                let country = if stack.vpn_country.is_empty() {
+                    &stack.id
+                } else {
+                    &stack.vpn_country
+                };
+                format!("SERVER_COUNTRIES={}", country)
+            }
+        };
+
         // Template string
         let compose_content = format!(
             r#"services:
@@ -71,7 +83,7 @@ impl DockerManager {
       - OPENVPN_USER={vpn_user}
       - OPENVPN_PASSWORD={vpn_pass}
       - WIREGUARD_PRIVATE_KEY={wg_key}
-      - SERVER_COUNTRIES={vpn_city}
+      - {location_env}
       - FIREWALL_OUTBOUND_SUBNETS={firewall_outbound_subnets}
       - DNS_SERVER=off
       - DNS_UPSTREAM_RESOLVER_TYPE=plain
@@ -135,7 +147,7 @@ impl DockerManager {
             vpn_user = vpn_user,
             vpn_pass = vpn_pass,
             wg_key = wg_key,
-            vpn_city = stack.vpn_city,
+            location_env = location_env,
             firewall_outbound_subnets = firewall_outbound_subnets,
             ap_iface = stack.ap_iface,
             ssid = stack.ssid,

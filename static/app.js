@@ -308,7 +308,7 @@ function renderStacks() {
                     </div>
                     <div class="detail-item">
                         <span class="label">VPN Server</span>
-                        <span class="value">${s.vpn_city} (${s.vpn_type})</span>
+                        <span class="value">${s.vpn_city ? `${s.vpn_city}, ` : ''}${s.vpn_country || s.id} (${s.vpn_type})</span>
                     </div>
                     ${vpnIpSection}
                     ${auto12hBadge}
@@ -635,7 +635,7 @@ async function openEditStackModal(id) {
         }).join('');
 
         citySelect.innerHTML = locations.map(l => {
-            const sel = l.name === stack.vpn_city ? 'selected' : '';
+            const sel = (l.name === stack.vpn_city || l.name === stack.vpn_country) ? 'selected' : '';
             return `<option value="${l.name}" ${sel}>${l.name}</option>`;
         }).join('');
     } catch {}
@@ -799,7 +799,7 @@ document.getElementById('form-stack').addEventListener('submit', async (e) => {
     const ssid = document.getElementById('stack-ssid').value.trim();
     const ap_security = document.getElementById('stack-security').value;
     const vpn_type = document.getElementById('stack-vpn-type').value;
-    const vpn_city = document.getElementById('stack-vpn-city').value;
+    const vpn_location = document.getElementById('stack-vpn-city').value;
     const auto_reconnect_12h = document.getElementById('stack-auto-reconnect-12h').checked;
     
     let password = '';
@@ -832,7 +832,7 @@ document.getElementById('form-stack').addEventListener('submit', async (e) => {
         password,
         ap_iface,
         vpn_type,
-        vpn_city,
+        vpn_country: vpn_location,
         ap_security,
         auto_reconnect_12h
     };

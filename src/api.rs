@@ -50,7 +50,8 @@ pub struct CreateStackInput {
     pub password: String,
     pub ap_iface: String,
     pub vpn_type: String, // "wireguard" or "openvpn"
-    pub vpn_city: String,
+    pub vpn_country: Option<String>,
+    pub vpn_city: Option<String>,
     pub subnet: Option<String>,
     pub routing_table: Option<u8>,
     pub ap_channel: Option<u8>,
@@ -294,12 +295,20 @@ async fn create_stack(
 
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
 
+    let vpn_country = input
+        .vpn_country
+        .filter(|c| !c.is_empty())
+        .unwrap_or_else(|| {
+            input.vpn_city.clone().unwrap_or_else(|| input.id.clone())
+        });
+
     let new_stack = Stack {
         id: input.id,
         ssid: input.ssid,
         password: input.password,
         ap_iface: input.ap_iface,
         vpn_type: input.vpn_type,
+        vpn_country,
         vpn_city: input.vpn_city,
         subnet,
         routing_table,
@@ -376,11 +385,13 @@ async fn update_stack(
 
     let mut updated = stacks[idx].clone();
     
-    // Update config fields (keep vpn_city unchanged per task requirement)
+    // Update config fields
     updated.ssid = input.ssid;
     updated.password = input.password;
     updated.ap_iface = input.ap_iface;
     updated.vpn_type = input.vpn_type;
+    if let Some(country) = input.vpn_country { updated.vpn_country = country; }
+    if input.vpn_city.is_some() { updated.vpn_city = input.vpn_city; }
     if let Some(sub) = input.subnet { updated.subnet = sub; }
     if let Some(rt) = input.routing_table { updated.routing_table = rt; }
     if let Some(ch) = input.ap_channel { updated.ap_channel = ch; }
