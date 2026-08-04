@@ -53,17 +53,7 @@ impl DockerManager {
         // Subnet calculation: find outbound subnet or default to 0.0.0.0/0
         let firewall_outbound_subnets = &stack.subnet;
 
-        let location_env = match &stack.vpn_city {
-            Some(city) if !city.is_empty() => format!("SERVER_CITIES={}", city),
-            _ => {
-                let country = if stack.vpn_country.is_empty() {
-                    &stack.id
-                } else {
-                    &stack.vpn_country
-                };
-                format!("SERVER_COUNTRIES={}", country)
-            }
-        };
+        let location_env = resolve_location_env(stack);
 
         // Template string
         let compose_content = format!(
@@ -311,7 +301,6 @@ impl DockerManager {
         None
     }
 }
-
 // Utility to parse subnet and get first host IP. E.g. "192.168.60.0/24" -> "192.168.60.1"
 fn get_gateway_ip(subnet: &str) -> String {
     let parts: Vec<&str> = subnet.split('/').next().unwrap_or("").split('.').collect();
@@ -319,5 +308,92 @@ fn get_gateway_ip(subnet: &str) -> String {
         format!("{}.{}.{}.1", parts[0], parts[1], parts[2])
     } else {
         "192.168.60.1".to_string()
+    }
+}
+
+pub fn resolve_location_env(stack: &Stack) -> String {
+    match &stack.vpn_city {
+        Some(city) if !city.is_empty() && !city.eq_ignore_ascii_case(&stack.vpn_country) => {
+            format!("SERVER_CITIES={}", city)
+        }
+        _ => {
+            let country = if stack.vpn_country.is_empty() {
+                &stack.id
+            } else {
+                &stack.vpn_country
+            };
+            format!("SERVER_COUNTRIES={}", country)
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_resolve_location_env_country_only() {
+        let stack = Stack {
+            id: "india".to_string(),
+            ssid: "Test".to_string(),
+            password: "password123".to_string(),
+            ap_iface: "wlan0".to_string(),
+            vpn_type: "wireguard".to_string(),
+            vpn_country: "india".to_string(),
+            vpn_city: None,
+            subnet: "192.168.60.0/24".to_string(),
+            routing_table: 100,
+            ap_channel: 6,
+            ap_hw_mode: "g".to_string(),
+            ap_channel_width: 20,
+            ap_security: "wpa2".to_string(),
+            auto_reconnect_12h: false,
+            last_reconnect_at: 0,
+        };
+        assert_eq!(resolve_location_env(&stack), "SERVER_COUNTRIES=india");
+    }
+
+    #[test]
+    fn test_resolve_location_env_city_equals_country() {
+        let stack = Stack {
+            id: "india".to_string(),
+            ssid: "Test".to_string(),
+            password: "password123".to_string(),
+            ap_iface: "wlan0".to_string(),
+            vpn_type: "wireguard".to_string(),
+            vpn_country: "india".to_string(),
+            vpn_city: Some("india".to_string()),
+            subnet: "192.168.60.0/24".to_string(),
+            routing_table: 100,
+            ap_channel: 6,
+            ap_hw_mode: "g".to_string(),
+            ap_channel_width: 20,
+            ap_security: "wpa2".to_string(),
+            auto_reconnect_12h: false,
+            last_reconnect_at: 0,
+        };
+        assert_eq!(resolve_location_env(&stack), "SERVER_COUNTRIES=india");
+    }
+
+    #[test]
+    fn test_resolve_location_env_distinct_city() {
+        let stack = Stack {
+            id: "us".to_string(),
+            ssid: "Test".to_string(),
+            password: "password123".to_string(),
+            ap_iface: "wlan0".to_string(),
+            vpn_type: "wireguard".to_string(),
+            vpn_country: "United States".to_string(),
+            vpn_city: Some("Seattle".to_string()),
+            subnet: "192.168.60.0/24".to_string(),
+            routing_table: 100,
+            ap_channel: 6,
+            ap_hw_mode: "g".to_string(),
+            ap_channel_width: 20,
+            ap_security: "wpa2".to_string(),
+            auto_reconnect_12h: false,
+            last_reconnect_at: 0,
+        };
+        assert_eq!(resolve_location_env(&stack), "SERVER_CITIES=Seattle");
     }
 }

@@ -302,6 +302,10 @@ async fn create_stack(
             input.vpn_city.clone().unwrap_or_else(|| input.id.clone())
         });
 
+    let vpn_city = input
+        .vpn_city
+        .filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case(&vpn_country));
+
     let new_stack = Stack {
         id: input.id,
         ssid: input.ssid,
@@ -309,7 +313,7 @@ async fn create_stack(
         ap_iface: input.ap_iface,
         vpn_type: input.vpn_type,
         vpn_country,
-        vpn_city: input.vpn_city,
+        vpn_city,
         subnet,
         routing_table,
         ap_channel,
@@ -391,7 +395,9 @@ async fn update_stack(
     updated.ap_iface = input.ap_iface;
     updated.vpn_type = input.vpn_type;
     if let Some(country) = input.vpn_country { updated.vpn_country = country; }
-    if input.vpn_city.is_some() { updated.vpn_city = input.vpn_city; }
+    if input.vpn_city.is_some() {
+        updated.vpn_city = input.vpn_city.filter(|c| !c.is_empty() && !c.eq_ignore_ascii_case(&updated.vpn_country));
+    }
     if let Some(sub) = input.subnet { updated.subnet = sub; }
     if let Some(rt) = input.routing_table { updated.routing_table = rt; }
     if let Some(ch) = input.ap_channel { updated.ap_channel = ch; }
