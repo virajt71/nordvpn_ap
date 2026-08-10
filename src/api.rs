@@ -539,11 +539,14 @@ async fn get_stack_logs(
 
 async fn get_credentials(State(state): State<AppState>) -> impl IntoResponse {
     let creds = state.config_manager.load_credentials();
-    // Do not return password/key values directly for security, just let user know if they exist
+    // Return credential existence status and values if configured
     Json(json!({
         "has_openvpn_user": creds.openvpn_user.is_some() && !creds.openvpn_user.as_ref().unwrap().is_empty(),
         "has_openvpn_password": creds.openvpn_password.is_some() && !creds.openvpn_password.as_ref().unwrap().is_empty(),
         "has_wireguard_private_key": creds.wireguard_private_key.is_some() && !creds.wireguard_private_key.as_ref().unwrap().is_empty(),
+        "openvpn_user": creds.openvpn_user.unwrap_or_default(),
+        "openvpn_password": creds.openvpn_password.unwrap_or_default(),
+        "wireguard_private_key": creds.wireguard_private_key.unwrap_or_default(),
     }))
 }
 

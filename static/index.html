@@ -147,6 +147,9 @@
                             <div class="input-with-button">
                                 <input type="password" id="cred-nordvpn-token"
                                     placeholder="Enter NordVPN Access Token (e.g. token:...)">
+                                <button type="button" class="btn btn-secondary btn-toggle-show" data-target="cred-nordvpn-token" title="Toggle visibility">
+                                    <i class="fa-solid fa-eye"></i> Show
+                                </button>
                                 <button type="button" class="btn btn-secondary" id="btn-fetch-wg-key">
                                     <i class="fa-solid fa-cloud-arrow-down"></i> Fetch Key
                                 </button>
@@ -156,8 +159,13 @@
                         </div>
                         <div class="form-group">
                             <label for="cred-wg-key">NordVPN WireGuard Private Key</label>
-                            <input type="password" id="cred-wg-key"
-                                placeholder="Enter WireGuard Private Key (for NordLynx)">
+                            <div class="input-with-button">
+                                <input type="password" id="cred-wg-key"
+                                    placeholder="Enter WireGuard Private Key (for NordLynx)">
+                                <button type="button" class="btn btn-secondary btn-toggle-show" data-target="cred-wg-key" title="Toggle visibility">
+                                    <i class="fa-solid fa-eye"></i> Show
+                                </button>
+                            </div>
                             <small>Required if using Wireguard (NordLynx) protocol.</small>
                         </div>
                         <div class="form-row"
@@ -168,7 +176,12 @@
                             </div>
                             <div class="form-group">
                                 <label for="cred-ovpn-pass">OpenVPN Password</label>
-                                <input type="password" id="cred-ovpn-pass" placeholder="Enter OpenVPN Service Password">
+                                <div class="input-with-button">
+                                    <input type="password" id="cred-ovpn-pass" placeholder="Enter OpenVPN Service Password">
+                                    <button type="button" class="btn btn-secondary btn-toggle-show" data-target="cred-ovpn-pass" title="Toggle visibility">
+                                        <i class="fa-solid fa-eye"></i> Show
+                                    </button>
+                                </div>
                             </div>
                         </div>
                         <small class="row-help">Required if using OpenVPN protocol. Get these credentials from your
