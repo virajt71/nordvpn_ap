@@ -375,6 +375,35 @@
 
 
 
+    <!-- RF-kill Alert Modal -->
+    <div class="modal" id="modal-rfkill">
+        <div class="modal-content glass-panel animated zoomIn" style="border: 1px solid var(--color-danger); max-width: 560px;">
+            <div class="modal-header" style="border-bottom: 1px solid rgba(255, 23, 68, 0.2);">
+                <h3 style="color: var(--color-danger); display: flex; align-items: center; gap: 10px;">
+                    <i class="fa-solid fa-triangle-exclamation"></i> Wireless Interface RF-Killed
+                </h3>
+                <button class="btn-close-modal" id="btn-close-rfkill-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body" style="padding: 10px 0;">
+                <p style="margin-bottom: 12px; font-size: 14px; line-height: 1.5; color: var(--color-text-main);">
+                    The Linux kernel radio kill-switch (<strong>RF-kill</strong>) is currently blocking your wireless network interface:
+                </p>
+                <div class="code-banner" id="rfkill-error-details" style="background: rgba(255, 23, 68, 0.08); border-left: 3px solid var(--color-danger); padding: 12px; font-family: var(--font-mono); font-size: 12px; color: #ff8a80; border-radius: 6px; margin-bottom: 16px; word-break: break-word; white-space: pre-wrap;">
+RTNETLINK answers: Operation not possible due to RF-kill
+                </div>
+                <p style="font-size: 13px; color: var(--color-text-muted); margin-bottom: 15px; line-height: 1.4;">
+                    Your Wi-Fi adapter is soft-blocked or disabled on the host system. Click <strong>Attempt RF-Unblock</strong> to trigger automatic hardware unblocking, or run <code>sudo rfkill unblock wifi</code> directly on your host terminal.
+                </p>
+            </div>
+            <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--border-color); padding-top: 15px;">
+                <button class="btn btn-secondary" id="btn-dismiss-rfkill">Dismiss</button>
+                <button class="btn btn-primary" id="btn-unblock-rfkill" style="background: var(--color-danger); border-color: var(--color-danger);">
+                    <i class="fa-solid fa-bolt"></i> Attempt RF-Unblock Now
+                </button>
+            </div>
+        </div>
+    </div>
+
     <script src="/static/app.js"></script>
 </body>
 

@@ -1,108 +1,199 @@
-# NordVPN-AP: Dockerized WiFi Access Point Manager
+# nordvpn_ap
 
-> Turn any Linux machine into a privacy-first VPN router - no expensive hardware required.
+**Rust orchestrator + web dashboard that turns a Linux box into one or more NordVPN-tunneled WiFi access points.**
 
-This project broadcasts a WiFi hotspot that routes **100% of connected client traffic** through an encrypted NordVPN tunnel. Smart TVs, projectors, gaming consoles, or any device that can't run a VPN app natively gets full VPN coverage simply by connecting to the hotspot.
+Route any device that can't run a VPN client, smart TVs, consoles, projectors, through an encrypted NordVPN tunnel just by connecting to a hotspot. No dedicated VPN router hardware needed.
 
+## Why
 
-## Why This Project Exists
+Smart TVs and similar devices don't support VPN apps, and hardware VPN routers are pricey or underpowered. A VPN router is really just "VPN client + routing, in firmware." This project does that in Docker: any device joining the AP gets full-tunnel VPN coverage automatically, with per-stack isolation so you can run multiple APs (e.g. different exit countries) side by side.
 
-The frustration of trying to watch region-locked content like Netflix India on a Smart TV or projector sparked this project. These devices don't support VPN clients natively, and dedicated VPN routers are either expensive or underpowered for the task.
+## Stack topology
 
-The insight is straightforward: a VPN router is essentially just a device with a VPN client in its firmware and enough compute to handle routing. This project takes that idea and runs with it, using Docker and NordVPN to turn any standard Linux machine into a fully functional VPN Access Point. Once a device is connected to the hotspot, it is automatically routed through an encrypted tunnel—bypassing geo-restrictions and keeping all traffic private without requiring a VPN app on the end device.
+Each AP "stack" is a set of containers wired together per profile:
 
-A lightweight, premium Rust Orchestrator & Web Dashboard to turn your Linux machine into multiple NordVPN-protected WiFi Access Point gateways.
+```
+client device → hostapd/dnsmasq AP → gluetun (NordVPN/WireGuard) → internet
+                                    ↳ AdGuard Home (ad-block DNS, in-namespace)
+```
+
+- **Orchestrator** (Rust / Axum / Tokio / bollard), manages Docker stacks, exposes REST + WebSocket API, serves the dashboard.
+- **gluetun**, VPN tunnel + kill-switch per stack.
+- **AdGuard Home**, per-stack DNS ad-blocking, runs inside gluetun's network namespace.
+- **hostapd/dnsmasq** (`access_point/`), the actual WiFi AP container.
+
+## 🏗 Architecture
+
+### Single Profile Flow
+
+Each profile consists of three primary services: **Gluetun** (VPN), **WiFi-AP** (Hotspot), and **AdGuard** (DNS Ad-Blocking). Traffic is routed through dedicated policy routing tables on the host to ensure all connected clients are protected, while DNS requests are silently intercepted and filtered.
+
+```mermaid
+graph TD
+    subgraph "Client Layer"
+        C[WiFi Client Device]
+    end
+    subgraph "Docker Host (Linux)"
+        subgraph "Country Profile (e.g., 'afghanistan')"
+            AP["WiFi-AP Service<br/>(hostapd / dnsmasq)"]
+            AGH["AdGuard Home<br/>(DNS Filter)"]
+            GT["Gluetun Service<br/>(NordVPN / Kill-switch)"]
+        end
+        
+        WIFI["Physical WiFi Interface<br/>(e.g., wlan0)"]
+        RT["Policy Routing Table<br/>(e.g., Table 100)"]
+        TUN["Virtual Tunnel<br/>(tun0)"]
+    end
+    C -- Connects to SSID --> WIFI
+    WIFI -- Managed by --> AP
+    AP -- "DNS Port 53 Intercept" --> AGH
+    AP -- "Marks & Routes" --> RT
+    RT -- "Forwards to" --> GT
+    AGH -- "Upstream Queries" --> GT
+    GT -- "Encrypts & Tunnels" --> TUN
+    TUN -- "NordVPN Exit Node" --> Internet((Internet))
+    style GT fill:#4a90d9,stroke:#333,stroke-width:2px,color:#fff
+    style AP fill:#00c896,stroke:#333,stroke-width:2px,color:#fff
+    style AGH fill:#ff5c5c,stroke:#333,stroke-width:2px,color:#fff
+```
+
+### Multi-Country Scalability
+
+The architecture supports running multiple stacks concurrently by isolating each profile with its own physical interface, subnet, and routing table. Each stack runs a fully isolated AdGuard Home instance.
+
+```mermaid
+graph LR
+    subgraph "Profile: US"
+        AP1[WiFi-AP] --> AGH1[AdGuard] --> RT1[RT 100] --> GT1[Gluetun]
+    end
+    subgraph "Profile: UK"
+        AP2[WiFi-AP] --> AGH2[AdGuard] --> RT2[RT 101] --> GT2[Gluetun]
+    end
+    W1[wlan0] -.-> AP1
+    W2[wlan1] -.-> AP2
+    GT1 --> I((Internet))
+    GT2 --> I
+    classDef vpnStyle fill:#4a90d9,stroke:#333,stroke-width:2px,color:#fff;
+    classDef apStyle fill:#00c896,stroke:#333,stroke-width:2px,color:#fff;
+    classDef aghStyle fill:#ff5c5c,stroke:#333,stroke-width:2px,color:#fff;
+    class GT1,GT2 vpnStyle;
+    class AP1,AP2 apStyle;
+    class AGH1,AGH2 aghStyle;
+```
 
 ---
 
-## 🚀 Features
+## Features
 
-- **Automated WireGuard Key Fetcher**: Enter your NordVPN Access Token in the dashboard and click **"Fetch Key"** to automatically retrieve and save your `nordlynx_private_key` directly from the NordVPN API.
-- **Full Stack Editing**: Modify existing access point parameters (SSID, Password, Security, Channel, Channel Width, Hardware Mode, 12h Reconnect) while maintaining immutable VPN Location & Profile ID integrity.
-- **12-Hour Auto-Reconnect**: Toggleable background scheduler per stack that periodically disconnects and reconnects the VPN tunnel every 12 hours for optimal performance.
-- **Telemetry Overview Bar**: Real-time stats bar showcasing active/total stacks, tunneled gateways, and discovered system wireless interfaces.
-- **Zero-Config Setup**: Dynamic host path auto-detection on startup via container self-inspection; no shell variables to export.
-- **Interface Auditing**: Scans adapter standards (802.11a/b/g/n/ac/ax) and filters compatibility options dynamically.
-- **WiFi Security Selection**: Supports WPA2, WPA3 (SAE), Mixed, WPA Legacy, and Open (None) networks.
-- **Interactive Toggles**: Bypasses password validation and hides password rows for open systems.
-- **DNS Ad-Blocking & Kill-Switch**: Integrated per-stack AdGuard Home and Gluetun VPN tunnel with kill-switch safety.
-- **Activity Feed**: Sleek notification bell header component displaying system events in a glassmorphic dropdown history.
+- WireGuard key auto-fetch from a NordVPN access token (no manual key extraction)
+- Full stack editing, SSID, password, security, channel, channel width, hardware mode, 12h auto-reconnect, with VPN location/profile ID kept immutable post-creation
+- 12-hour scheduled VPN reconnect per stack for tunnel freshness
+- Real-time telemetry bar (active/total stacks, tunneled gateways, wireless interfaces)
+- Zero-config host path detection via container self-inspection, no env vars to export
+- WiFi interface auditing (802.11a/b/g/n/ac/ax capability detection)
+- WPA2 / WPA3(SAE) / Mixed / WPA-Legacy / Open security modes
+- Integrated kill-switch (gluetun) + ad-blocking (AdGuard Home) per stack
+- Live activity feed for system events
 
----
+## Setup
 
-## 🚦 Getting Started
+### 1. Prerequisites check
 
-### 1. Launch the Orchestrator
-Run Docker Compose to build and start the orchestrator service:
+```bash
+ip a                     # confirm your WiFi adapter name (e.g. wlan0) and that it supports AP mode
+iw list | grep -A 8 "Supported interface modes"   # verify "AP" is listed
+```
+
+Make sure Docker + Docker Compose v2 are installed and the daemon is running.
+
+### 2. Clone the repo
+
+```bash
+git clone https://github.com/virajt71/nordvpn_ap.git
+cd nordvpn_ap
+```
+
+### 3. Build and start the orchestrator
+
 ```bash
 docker compose up -d --build
 ```
 
-### 2. Open the Web Dashboard
-Navigate your browser to: `http://localhost:42918/`
+- Runs with `network_mode: host` + `privileged: true` (required for hostapd/interface/routing control).
+- Mounts `/var/run/docker.sock` so the orchestrator can manage its own child containers (gluetun, AdGuard, WiFi-AP) via `bollard`.
+- `HOST_PROJECT_DIR` is auto-detected on startup via `docker inspect` self-lookup, no manual env export needed. Override it in `docker-compose.yml` if auto-detection fails on your setup.
+- `API_PORT` defaults to `42918`; change it in `docker-compose.yml` under `environment:` if needed.
 
-### 3. Configure VPN Credentials
-1. Go to the **Settings → NordVPN Credentials** section.
-2. If using **WireGuard (NordLynx)**: Paste your NordVPN Access Token and click **"Fetch Key"**. The dashboard will automatically extract and save your WireGuard Private Key.
-3. If using **OpenVPN**: Enter your OpenVPN Service Username and Password obtained from your NordVPN dashboard.
+### 4. Open the dashboard
 
-> [!TIP]
-> **Getting your NordVPN Access Token**: Log into your NordVPN Dashboard → find Access Token section under Advanced settings → Get Access Token.
+```
+http://localhost:42918/
+```
 
----
+### 5. Add your NordVPN credentials
 
-## 🔌 API Endpoints
+Go to **Settings → NordVPN Credentials**:
+- **WireGuard (NordLynx)**: paste your NordVPN access token → **Fetch Key** (auto-extracts and saves the private key)
+- **OpenVPN**: enter your OpenVPN service username/password from the NordVPN dashboard
+
+> Access token: NordVPN dashboard → Advanced settings → Access Token.
+
+### 6. Create your first AP stack
+
+From the dashboard: pick a WiFi interface, exit country/location, SSID, password, and security mode → create. The orchestrator auto-allocates a subnet and policy routing table, spins up gluetun + AdGuard Home + the hostapd/dnsmasq AP container, and streams live status over `/ws/stacks`.
+
+To add another stack (e.g. a second country), repeat with a different physical WiFi interface, since each profile needs its own adapter.
+
+### Persistent data
+
+- `data/stacks.json`, `data/credentials.json`, and per-profile state under `country/` are created automatically on first run and persisted on the host via the bind mount in `docker-compose.yml`. Back these up if you want to preserve stack configs across host rebuilds.
+
+## API
 
 | Method | Endpoint | Description |
-| :--- | :--- | :--- |
-| `GET` | `/api/stacks` | List all AP profiles, active status, and VPN IPs |
-| `POST` | `/api/stacks` | Create a new AP stack (auto-allocates subnet/routing table) |
-| `GET` | `/api/stacks/:id` | Get detailed status of a specific AP stack |
-| `PATCH` | `/api/stacks/:id` | Update an existing stack configuration |
-| `DELETE` | `/api/stacks/:id` | Remove a stack and tear down its containers |
-| `POST` | `/api/stacks/:id/start` | Start containers for a specific stack |
-| `POST` | `/api/stacks/:id/stop` | Stop containers for a specific stack |
-| `POST` | `/api/stacks/:id/restart` | Restart containers for a specific stack (stop/start chain) |
-| `GET` | `/api/stacks/:id/logs` | Query container logs for Gluetun, WiFi-AP, and AdGuard |
-| `GET` | `/api/credentials` | Query configured credentials presence |
-| `PATCH` | `/api/credentials` | Update OpenVPN credentials or fetch WireGuard key via Access Token |
-| `GET` | `/api/wifi/interfaces` | List host WiFi interfaces and audited capabilities |
-| `GET` | `/api/vpn/locations` | Query available NordVPN exit node locations |
-| `GET` | `/api/health` | Get health check status of the orchestrator and Docker daemon |
-| `WS` | `/ws/stacks` | Real-time status streaming endpoint |
+|---|---|---|
+| GET | `/api/stacks` | List AP profiles, status, VPN IPs |
+| POST | `/api/stacks` | Create stack (auto-allocates subnet/routing table) |
+| GET | `/api/stacks/:id` | Stack detail |
+| PATCH | `/api/stacks/:id` | Update stack config |
+| DELETE | `/api/stacks/:id` | Remove stack + tear down containers |
+| POST | `/api/stacks/:id/start` \| `/stop` \| `/restart` | Lifecycle control |
+| GET | `/api/stacks/:id/logs` | Gluetun / WiFi-AP / AdGuard logs |
+| GET / PATCH | `/api/credentials` | Query / update NordVPN credentials |
+| GET | `/api/wifi/interfaces` | Host WiFi interfaces + capabilities |
+| GET | `/api/vpn/locations` | Available NordVPN exit locations |
+| GET | `/api/health` | Orchestrator + Docker daemon health |
+| WS | `/ws/stacks` | Real-time stack status stream |
 
----
+## Project layout
 
-## 📂 Project Structure
+```
+src/            Rust orchestrator (Axum, Tokio, bollard DockerManager)
+static/         Web dashboard (HTML/CSS/JS, glassmorphic UI)
+access_point/   Docker build context for the hostapd/dnsmasq AP container
+country/        Per-profile runtime state (generated, e.g. country/us_ap/)
+data/           Persistent JSON stores (stacks.json, credentials.json)
+```
 
-- `src/`: The Rust orchestrator backend source code (`Axum`, `Tokio`, `DockerManager`).
-- `static/`: The frontend web dashboard assets (HTML, CSS, JS with Technical Glassmorphic design).
-- `access_point/`: Docker build context for the physical WiFi Access Point container (`hostapd`/`dnsmasq`).
-- `country/`: Contains per-profile runtime state generated by the orchestrator (e.g. `country/us_ap/`).
-- `data/`: Persistent application JSON stores (`stacks.json`, `credentials.json`).
+## Prerequisites
 
----
+- Linux host with a kernel supporting `hostapd` and policy routing
+- Docker + Docker Compose, with access to `/var/run/docker.sock`
+- WiFi adapter that supports AP mode
+- Runs `--privileged` + `network_mode: host` (needed for hostapd/interface control)
 
-## 🛠 Prerequisites
+## References
 
-- **OS**: Linux (with a kernel supporting `hostapd` and policy routing).
-- **Docker & Docker Compose**: Installed and running with access to `/var/run/docker.sock`.
-- **Hardware**: A WiFi network card supporting **AP (Access Point) mode**.
-
----
-
-## 📚 References
-
-- **Understanding WiFi Standards (802.11a/b/g/n/ac/ax)**: [Standardy Wi-Fi](https://www.netia.pl/pl/blog/standardy-wi-fi-802-11-a-b-g-n-ac-ax)
-- **hostapd documentation**: [w1.fi/hostapd](https://w1.fi/hostapd/)
-- **Gluetun VPN client**: [GitHub - qdm12/gluetun](https://github.com/qdm12/gluetun)
-
----
+- [WiFi standards overview (802.11a/b/g/n/ac/ax)](https://www.netia.pl/pl/blog/standardy-wi-fi-802-11-a-b-g-n-ac-ax)
+- [hostapd docs](https://w1.fi/hostapd/)
+- [gluetun](https://github.com/qdm12/gluetun)
 
 ## Credits
 
-Inspired by [dannypv05261](https://github.com/dannypv05261/docker-vpn-ap) for demonstrating the foundational logic of sharing a tunneled network over a WiFi Access Point.
+Foundational tunnel-sharing logic inspired by [dannypv05261/docker-vpn-ap](https://github.com/dannypv05261/docker-vpn-ap).
 
 ---
 
-*Built with ❤️ using [Gluetun](https://github.com/qdm12/gluetun) and [hostapd](https://w1.fi/hostapd/).*
+## Suggested GitHub repo description
+
+> Rust/Axum orchestrator + dashboard for Docker-based NordVPN WiFi access points, multi-stack, kill-switch, ad-block DNS, per-device full-tunnel VPN with no client software.

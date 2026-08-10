@@ -217,9 +217,24 @@ echo "==> ${TAG} Configuring $AP_IFACE..."
 # Tell host NetworkManager to ignore this interface to prevent conflicts (requires pid: host and privileged: true)
 nsenter -t 1 -m -u -i -n -- nmcli dev set "$AP_IFACE" managed no 2>/dev/null || true
 
+# Unblock Wi-Fi if soft-blocked by RF-kill
+rfkill unblock wifi 2>/dev/null || rfkill unblock all 2>/dev/null || true
+nsenter -t 1 -m -u -i -n -- rfkill unblock wifi 2>/dev/null || nsenter -t 1 -m -u -i -n -- rfkill unblock all 2>/dev/null || true
+
 ip link set "$AP_IFACE" down 2>/dev/null || true
 ip addr flush dev "$AP_IFACE" 2>/dev/null || true
 ip addr add "$AP_IP/24" dev "$AP_IFACE"
+
+# Retry bringing interface up if RF-kill is temporarily blocking it
+for attempt in $(seq 1 5); do
+    if ip link set "$AP_IFACE" up 2>/dev/null; then
+        break
+    fi
+    echo "  ${TAG} Failed to set $AP_IFACE up (attempt $attempt/5), unblocking rfkill and retrying..."
+    rfkill unblock wifi 2>/dev/null || rfkill unblock all 2>/dev/null || true
+    nsenter -t 1 -m -u -i -n -- rfkill unblock wifi 2>/dev/null || nsenter -t 1 -m -u -i -n -- rfkill unblock all 2>/dev/null || true
+    sleep 1
+done
 ip link set "$AP_IFACE" up
 
 (
@@ -258,6 +273,8 @@ while true; do
 
     if ! kill -0 "$HOSTAPD_PID" 2>/dev/null; then
         echo "WARN ${TAG}: hostapd died, restarting..."
+        rfkill unblock wifi 2>/dev/null || rfkill unblock all 2>/dev/null || true
+        nsenter -t 1 -m -u -i -n -- rfkill unblock wifi 2>/dev/null || nsenter -t 1 -m -u -i -n -- rfkill unblock all 2>/dev/null || true
         hostapd /tmp/hostapd-${COUNTRY}.conf &
         HOSTAPD_PID=$!
         sleep 2

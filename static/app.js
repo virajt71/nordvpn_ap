@@ -83,6 +83,26 @@ function renderNotifications() {
     });
 }
 
+// RF-Kill Modal Alert Handlers
+function showRfKillModal(detailsText) {
+    const modal = document.getElementById('modal-rfkill');
+    if (!modal) return;
+    const detailsElem = document.getElementById('rfkill-error-details');
+    if (detailsElem && detailsText) {
+        detailsElem.textContent = detailsText;
+    }
+    modal.classList.add('open');
+    showToast('RF-kill wireless block detected on WiFi interface!', 'error');
+}
+
+function checkRfKillError(text) {
+    if (typeof text === 'string' && (text.includes('RF-kill') || text.includes('rfkill') || text.includes('RF-Kill'))) {
+        showRfKillModal(text);
+        return true;
+    }
+    return false;
+}
+
 // Fetch wrapper with authentication
 async function apiRequest(endpoint, options = {}) {
     const { silentError, ...fetchOptions } = options;
@@ -101,11 +121,14 @@ async function apiRequest(endpoint, options = {}) {
 
         if (!response.ok) {
             const errData = await response.json().catch(() => ({}));
-            throw new Error(errData.error || `HTTP error! Status: ${response.status}`);
+            const errMsg = errData.error || `HTTP error! Status: ${response.status}`;
+            checkRfKillError(errMsg);
+            throw new Error(errMsg);
         }
 
         return await response.json();
     } catch (error) {
+        checkRfKillError(error.message);
         // ponytail: Suppress toast error notifications on silentError (background polling / health checks)
         if (!silentError) {
             showToast(error.message, 'error');
@@ -350,7 +373,9 @@ async function startStack(id) {
         await apiRequest(`/api/stacks/${id}/start`, { method: 'POST' });
         showToast(`AP stack '${id}' started successfully.`, 'success');
         loadDashboard();
-    } catch { }
+    } catch (err) {
+        checkRfKillError(err?.message);
+    }
 }
 
 async function stopStack(id) {
@@ -359,7 +384,9 @@ async function stopStack(id) {
         await apiRequest(`/api/stacks/${id}/stop`, { method: 'POST' });
         showToast(`AP stack '${id}' stopped.`, 'success');
         loadDashboard();
-    } catch { }
+    } catch (err) {
+        checkRfKillError(err?.message);
+    }
 }
 
 async function restartStack(id) {
@@ -368,7 +395,9 @@ async function restartStack(id) {
         await apiRequest(`/api/stacks/${id}/restart`, { method: 'POST' });
         showToast(`AP stack '${id}' restarted.`, 'success');
         loadDashboard();
-    } catch { }
+    } catch (err) {
+        checkRfKillError(err?.message);
+    }
 }
 
 async function deleteStack(id) {
@@ -415,6 +444,10 @@ async function fetchLogs() {
 
         const outputElem = document.getElementById('logs-output');
         outputElem.innerText = content;
+
+        if (content.includes('RF-kill') || content.includes('rfkill') || content.includes('RF-Kill')) {
+            checkRfKillError(content);
+        }
 
         // Scroll terminal to bottom
         const terminalBody = document.getElementById('terminal-content');
@@ -954,6 +987,39 @@ document.addEventListener('click', (e) => {
         document.getElementById('notification-dropdown').style.display = 'none';
     }
 });
+
+// RF-kill Modal Event Listeners
+const closeRfkillBtn = document.getElementById('btn-close-rfkill-modal');
+const dismissRfkillBtn = document.getElementById('btn-dismiss-rfkill');
+const unblockRfkillBtn = document.getElementById('btn-unblock-rfkill');
+
+if (closeRfkillBtn) {
+    closeRfkillBtn.addEventListener('click', () => {
+        document.getElementById('modal-rfkill').classList.remove('open');
+    });
+}
+if (dismissRfkillBtn) {
+    dismissRfkillBtn.addEventListener('click', () => {
+        document.getElementById('modal-rfkill').classList.remove('open');
+    });
+}
+if (unblockRfkillBtn) {
+    unblockRfkillBtn.addEventListener('click', async () => {
+        unblockRfkillBtn.disabled = true;
+        unblockRfkillBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Unblocking...';
+        try {
+            const res = await apiRequest('/api/rfkill/unblock', { method: 'POST' });
+            showToast(res.message || 'RF-kill unblock command issued successfully.', 'success');
+            document.getElementById('modal-rfkill').classList.remove('open');
+            loadDashboard();
+        } catch (e) {
+            showToast(`Unblock failed: ${e.message}`, 'error');
+        } finally {
+            unblockRfkillBtn.disabled = false;
+            unblockRfkillBtn.innerHTML = '<i class="fa-solid fa-bolt"></i> Attempt RF-Unblock Now';
+        }
+    });
+}
 
 // Start application
 startHealthCheck();

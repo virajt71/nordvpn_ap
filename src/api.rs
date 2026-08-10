@@ -201,6 +201,7 @@ pub fn create_router(state: AppState) -> Router {
         // Utils routes
         .route("/wifi/interfaces", get(list_wifi_interfaces))
         .route("/vpn/locations", get(list_vpn_locations))
+        .route("/rfkill/unblock", post(unblock_rfkill))
         .route("/health", get(get_health));
 
     Router::new()
@@ -664,6 +665,27 @@ async fn list_vpn_locations() -> impl IntoResponse {
         { "name": "Australia", "code": "AU" }
     ]);
     Json(fallback).into_response()
+}
+
+async fn unblock_rfkill() -> impl IntoResponse {
+    let output = Command::new("rfkill").args(["unblock", "wifi"]).output();
+    let output_all = Command::new("rfkill").args(["unblock", "all"]).output();
+    let host_output = Command::new("nsenter")
+        .args(["-t", "1", "-m", "-u", "-i", "-n", "--", "rfkill", "unblock", "wifi"])
+        .output();
+    let host_output_all = Command::new("nsenter")
+        .args(["-t", "1", "-m", "-u", "-i", "-n", "--", "rfkill", "unblock", "all"])
+        .output();
+
+    let success = output.map(|o| o.status.success()).unwrap_or(false)
+        || output_all.map(|o| o.status.success()).unwrap_or(false)
+        || host_output.map(|o| o.status.success()).unwrap_or(false)
+        || host_output_all.map(|o| o.status.success()).unwrap_or(false);
+
+    Json(json!({
+        "success": success,
+        "message": if success { "Issued RF-kill unblock command successfully." } else { "Attempted RF-kill unblock command." }
+    }))
 }
 
 async fn get_health(State(state): State<AppState>) -> impl IntoResponse {
