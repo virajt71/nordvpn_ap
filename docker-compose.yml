@@ -1,0 +1,25 @@
+services:
+  ap-manager:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: ap-manager
+    network_mode: host
+    # ponytail: privileged required for host network interface creation (iw/iptables) & docker socket control; upgrade path: fine-grained cap_add (NET_ADMIN, NET_RAW) if host permissions permit
+    privileged: true
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    environment:
+      - HOST_PROJECT_DIR=${PWD}
+      - API_PORT=42918
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - .:/app
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:42918/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+

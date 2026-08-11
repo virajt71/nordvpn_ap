@@ -1,0 +1,410 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VPN AP Manager</title>
+    <!-- Google Fonts: Outfit & Fira Code / Fira Sans for Technical Glassmorphism -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link
+        href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600;700&family=Fira+Sans:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap"
+        rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <!-- Custom Style Sheet -->
+    <link rel="stylesheet" href="/static/style.css">
+    <!-- SVG Favicon -->
+    <link rel="icon" type="image/svg+xml"
+        href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%233b82f6' d='M12 2L4 5v6.09c0 5.05 3.41 9.76 8 10.91 4.59-1.15 8-5.86 8-10.91V5l-8-3zm0 16c-3.31 0-6-2.69-6-6h2c0 2.21 1.79 4 4 4s4-1.79 4-4h2c0 3.31-2.69 6-6 6zm3-6H9c0-1.66 1.34-3 3-3s3 1.34 3 3z'/%3E%3C/svg%3E">
+</head>
+
+<body>
+    <div class="app-container">
+        <!-- Sidebar / Navigation -->
+        <aside class="sidebar">
+            <div class="brand">
+                <i class="fa-solid fa-circle-nodes brand-icon"></i>
+                <div class="brand-text">
+                    <h1>VPN AP</h1>
+                    <span>Orchestrator v1.0</span>
+                </div>
+            </div>
+            <nav class="nav-menu">
+                <button class="nav-item active" id="btn-nav-dashboard">
+                    <i class="fa-solid fa-chart-pie"></i> Dashboard
+                </button>
+                <button class="nav-item" id="btn-nav-credentials">
+                    <i class="fa-solid fa-key"></i> Credentials
+                </button>
+                <button class="nav-item" id="btn-nav-interfaces">
+                    <i class="fa-solid fa-wifi"></i> WiFi interfaces
+                </button>
+            </nav>
+            <div class="system-status">
+                <div class="status-indicator">
+                    <span class="pulse-dot green" id="api-status-dot"></span>
+                    <span class="status-label" id="api-status-text">Connecting...</span>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Workspace -->
+        <main class="main-content">
+            <!-- Top Header Bar -->
+            <header class="top-header">
+                <div class="header-title">
+                    <h2 id="page-title">Access Point Dashboard</h2>
+                    <p class="subtitle" id="page-subtitle">Monitor and control your VPN network gateways</p>
+                </div>
+                <div class="header-actions">
+                    <!-- Notification Bell Container -->
+                    <div class="notification-bell-container">
+                        <button class="btn-icon-bell" id="btn-notification-bell" title="Notifications">
+                            <i class="fa-solid fa-bell"></i>
+                            <span class="notification-badge" id="notification-badge" style="display: none;">0</span>
+                        </button>
+                        <!-- Notification Dropdown Panel -->
+                        <div class="notification-dropdown glass-panel" id="notification-dropdown"
+                            style="display: none;">
+                            <div class="notification-header">
+                                <span>Activity Notifications</span>
+                                <button class="btn-clear-notifications" id="btn-clear-notifications" title="Clear All">
+                                    Clear All
+                                </button>
+                            </div>
+                            <div class="notification-list" id="notification-list">
+                                <div class="notification-empty">No new activity</div>
+                            </div>
+                        </div>
+                    </div>
+                    <button class="btn btn-primary" id="btn-create-ap">
+                        <i class="fa-solid fa-plus"></i> Create Access Point
+                    </button>
+                </div>
+            </header>
+
+            <!-- Dashboard View -->
+            <section class="view-section active" id="view-dashboard">
+                <!-- Warning Alert Banner -->
+                <div class="alert-banner" id="env-warning-banner" style="display: none;">
+                    <i class="fa-solid fa-triangle-exclamation" style="font-size: 20px;"></i>
+                    <div>
+                        <strong>Configuration Warning:</strong> <code>HOST_PROJECT_DIR</code> is not set on the host.
+                        Sibling AP stacks will fail to build or mount volume paths correctly. Set it on the host and
+                        restart the orchestrator.
+                    </div>
+                </div>
+
+                <!-- Telemetry Summary Bar -->
+                <div class="metrics-bar" id="telemetry-summary-bar">
+                    <div class="metric-card glass-panel">
+                        <div class="metric-icon blue"><i class="fa-solid fa-tower-broadcast"></i></div>
+                        <div class="metric-details">
+                            <span class="metric-label">Active AP Stacks</span>
+                            <span class="metric-value" id="stat-active-stacks">0 / 0</span>
+                        </div>
+                    </div>
+                    <div class="metric-card glass-panel">
+                        <div class="metric-icon green"><i class="fa-solid fa-shield-halved"></i></div>
+                        <div class="metric-details">
+                            <span class="metric-label">VPN Tunnel Status</span>
+                            <span class="metric-value" id="stat-vpn-tunnels">--</span>
+                        </div>
+                    </div>
+                    <div class="metric-card glass-panel">
+                        <div class="metric-icon orange"><i class="fa-solid fa-wifi"></i></div>
+                        <div class="metric-details">
+                            <span class="metric-label">Hardware Interfaces</span>
+                            <span class="metric-value" id="stat-hw-ifaces">--</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="stacks-grid" id="stacks-container">
+                    <!-- Stack cards dynamically populated here -->
+                    <div class="loading-state">
+                        <i class="fa-solid fa-spinner fa-spin loading-spinner"></i>
+                        <p>Loading access point profiles...</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Credentials View -->
+            <section class="view-section" id="view-credentials">
+                <div class="settings-card glass-panel">
+                    <div class="card-header">
+                        <i class="fa-solid fa-shield-halved header-icon"></i>
+                        <div>
+                            <h3>VPN & API Credentials</h3>
+                            <p>Configure account detail overrides for Gluetun and AP Manager access control.</p>
+                        </div>
+                    </div>
+                    <form class="settings-form" id="form-credentials">
+                        <div class="form-group">
+                            <label for="cred-nordvpn-token">NordVPN Access Token (Automatic key extraction)</label>
+                            <div class="input-with-button">
+                                <input type="password" id="cred-nordvpn-token"
+                                    placeholder="Enter NordVPN Access Token (e.g. token:...)">
+                                <button type="button" class="btn btn-secondary btn-toggle-show" data-target="cred-nordvpn-token" title="Toggle visibility">
+                                    <i class="fa-solid fa-eye"></i> Show
+                                </button>
+                                <button type="button" class="btn btn-secondary" id="btn-fetch-wg-key">
+                                    <i class="fa-solid fa-cloud-arrow-down"></i> Fetch Key
+                                </button>
+                            </div>
+                            <small>Pasting an Access Token and clicking "Fetch Key" will automatically retrieve and save
+                                your WireGuard Private Key above.</small>
+                        </div>
+                        <div class="form-group">
+                            <label for="cred-wg-key">NordVPN WireGuard Private Key</label>
+                            <div class="input-with-button">
+                                <input type="password" id="cred-wg-key"
+                                    placeholder="Enter WireGuard Private Key (for NordLynx)">
+                                <button type="button" class="btn btn-secondary btn-toggle-show" data-target="cred-wg-key" title="Toggle visibility">
+                                    <i class="fa-solid fa-eye"></i> Show
+                                </button>
+                            </div>
+                            <small>Required if using Wireguard (NordLynx) protocol.</small>
+                        </div>
+                        <div class="form-row"
+                            style="margin-top: 15px; padding-top: 15px; border-top: 1px dashed var(--border-color);">
+                            <div class="form-group">
+                                <label for="cred-ovpn-user">OpenVPN Username</label>
+                                <input type="text" id="cred-ovpn-user" placeholder="Enter OpenVPN Service Username">
+                            </div>
+                            <div class="form-group">
+                                <label for="cred-ovpn-pass">OpenVPN Password</label>
+                                <div class="input-with-button">
+                                    <input type="password" id="cred-ovpn-pass" placeholder="Enter OpenVPN Service Password">
+                                    <button type="button" class="btn btn-secondary btn-toggle-show" data-target="cred-ovpn-pass" title="Toggle visibility">
+                                        <i class="fa-solid fa-eye"></i> Show
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                        <small class="row-help">Required if using OpenVPN protocol. Get these credentials from your
+                            NordVPN dashboard.</small>
+                        <div class="form-actions" style="margin-top: 20px;">
+                            <button type="submit" class="btn btn-primary" id="btn-save-credentials">
+                                <i class="fa-solid fa-floppy-disk"></i> Save Credentials
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </section>
+
+            <!-- WiFi Interfaces View -->
+            <section class="view-section" id="view-interfaces">
+                <div class="glass-panel">
+                    <div class="card-header">
+                        <i class="fa-solid fa-circle-nodes header-icon"></i>
+                        <div>
+                            <h3>Available WiFi Interfaces</h3>
+                            <p>Overview of system hardware interfaces and supported AP capabilities.</p>
+                        </div>
+                    </div>
+                    <div class="table-container">
+                        <table class="premium-table">
+                            <thead>
+                                <tr>
+                                    <th>Interface</th>
+                                    <th>Hardware Model</th>
+                                    <th>AP Support</th>
+                                    <th>Bands</th>
+                                    <th>Max Standard</th>
+                                    <th>Security</th>
+                                    <th>Recomm. Default</th>
+                                </tr>
+                            </thead>
+                            <tbody id="interfaces-table-body">
+                                <tr>
+                                    <td colspan="7" class="text-center">Scanning system interfaces...</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Create/Edit Stack Modal -->
+    <div class="modal" id="modal-stack">
+        <div class="modal-content glass-panel animated zoomIn">
+            <div class="modal-header">
+                <h3 id="modal-title">Create Access Point</h3>
+                <button class="btn-close-modal" id="btn-close-stack-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <form id="form-stack">
+                <input type="hidden" id="stack-edit-mode" value="false">
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="stack-vpn-city">VPN Location</label>
+                        <select id="stack-vpn-city" required>
+                            <!-- Populated dynamically -->
+                            <option value="United States">United States</option>
+                            <option value="Germany">Germany</option>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="stack-vpn-type">VPN Protocol</label>
+                        <select id="stack-vpn-type" required>
+                            <option value="wireguard">WireGuard (NordLynx)</option>
+                            <option value="openvpn">OpenVPN</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="stack-id">Profile Name / ID</label>
+                        <input type="text" id="stack-id" placeholder="e.g. us_ap" required pattern="^[a-z0-9_-]+$"
+                            title="Lowercase letters, numbers, dash, underscore only">
+                    </div>
+                    <div class="form-group">
+                        <label for="stack-ssid">SSID (WiFi Name)</label>
+                        <input type="text" id="stack-ssid" placeholder="e.g. Protected_WiFi" required>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group">
+                        <label for="stack-iface">WiFi Interface</label>
+                        <select id="stack-iface" required>
+                            <!-- Populated dynamically -->
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="stack-security">WiFi Security</label>
+                        <select id="stack-security" required>
+                            <option value="wpa2">WPA2 (Recommended)</option>
+                            <option value="wpa3" data-label="WPA3 (Modern SAE)">WPA3 (Modern SAE)</option>
+                            <option value="mixed" data-label="WPA2/WPA3 Mixed">WPA2/WPA3 Mixed</option>
+                            <option value="wpa">WPA (Legacy)</option>
+                            <option value="none">None (Open Network)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-row" id="password-form-row">
+                    <div class="form-group">
+                        <label for="stack-pass">WiFi Password</label>
+                        <input type="password" id="stack-pass" placeholder="Minimum 8 characters" required
+                            minlength="8">
+                        <small id="password-help" class="form-help"
+                            style="color: var(--color-text-muted); font-size: 11px; margin-top: 5px; display: block;">
+                            Recommended: 8-63 characters, mix of uppercase, lowercase, numbers, and symbols.
+                        </small>
+                    </div>
+                </div>
+                <div class="form-row">
+                    <div class="form-group toggle-group">
+                        <label for="stack-auto-reconnect-12h">12h Auto-Reconnect Scheduler</label>
+                        <div class="toggle-control">
+                            <label class="switch-toggle">
+                                <input type="checkbox" id="stack-auto-reconnect-12h">
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <span class="toggle-label-text">Automatically disconnect & reconnect VPN every 12
+                                hours</span>
+                        </div>
+                    </div>
+                </div>
+                <div class="accordion-header" id="adv-settings-toggle">
+                    <span>Advanced Network Settings (Auto-Allocated if empty)</span>
+                    <i class="fa-solid fa-chevron-down"></i>
+                </div>
+                <div class="accordion-content" id="adv-settings-content">
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="stack-subnet">Subnet Range</label>
+                            <input type="text" id="stack-subnet" placeholder="e.g. 192.168.60.0/24">
+                        </div>
+                        <div class="form-group">
+                            <label for="stack-routing-table">Routing Table ID</label>
+                            <input type="number" id="stack-routing-table" placeholder="e.g. 100" min="10" max="250">
+                        </div>
+                    </div>
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="stack-channel">WiFi Channel</label>
+                            <input type="number" id="stack-channel" placeholder="e.g. 6 (0 for auto)">
+                        </div>
+                        <div class="form-group">
+                            <label for="stack-hw-mode">802.11 Mode</label>
+                            <select id="stack-hw-mode">
+                                <option value="g" data-req="2_4ghz">2.4 GHz (802.11g)</option>
+                                <option value="a" data-req="5ghz">5 GHz (802.11a)</option>
+                                <option value="n" data-req="n">802.11n (High Speed)</option>
+                                <option value="ac" data-req="ac">802.11ac (Very High Speed)</option>
+                                <option value="ax" data-req="ax">802.11ax (WiFi 6)</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary" id="btn-save-stack">Create Stack</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- Logs Terminal Modal -->
+    <div class="modal" id="modal-logs">
+        <div class="modal-content glass-panel terminal-modal animated zoomIn">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-terminal brand-icon"></i> Container Logs: <span id="log-stack-id"></span></h3>
+                <button class="btn-close-modal" id="btn-close-logs-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="logs-tabs">
+                <button class="logs-tab active" data-tab="gluetun">Gluetun (VPN)</button>
+                <button class="logs-tab" data-tab="wifiap">WiFi AP (Hostapd/Dnsmasq)</button>
+                <button class="logs-tab" data-tab="adguard">AdGuard Home</button>
+            </div>
+            <div class="terminal-body" id="terminal-content">
+                <pre><code id="logs-output">Loading container logs...</code></pre>
+            </div>
+            <div class="terminal-footer">
+                <span class="logs-info"><i class="fa-solid fa-arrows-rotate"></i> Logs refresh automatically every
+                    5s</span>
+                <button class="btn btn-secondary btn-small" id="btn-refresh-logs">Refresh Now</button>
+            </div>
+        </div>
+    </div>
+
+
+
+
+
+    <!-- RF-kill Alert Modal -->
+    <div class="modal" id="modal-rfkill">
+        <div class="modal-content glass-panel animated zoomIn" style="border: 1px solid var(--color-danger); max-width: 560px;">
+            <div class="modal-header" style="border-bottom: 1px solid rgba(255, 23, 68, 0.2);">
+                <h3 style="color: var(--color-danger); display: flex; align-items: center; gap: 10px;">
+                    <i class="fa-solid fa-triangle-exclamation"></i> Wireless Interface RF-Killed
+                </h3>
+                <button class="btn-close-modal" id="btn-close-rfkill-modal"><i class="fa-solid fa-xmark"></i></button>
+            </div>
+            <div class="modal-body" style="padding: 10px 0;">
+                <p style="margin-bottom: 12px; font-size: 14px; line-height: 1.5; color: var(--color-text-main);">
+                    The Linux kernel radio kill-switch (<strong>RF-kill</strong>) is currently blocking your wireless network interface:
+                </p>
+                <div class="code-banner" id="rfkill-error-details" style="background: rgba(255, 23, 68, 0.08); border-left: 3px solid var(--color-danger); padding: 12px; font-family: var(--font-mono); font-size: 12px; color: #ff8a80; border-radius: 6px; margin-bottom: 16px; word-break: break-word; white-space: pre-wrap;">
+RTNETLINK answers: Operation not possible due to RF-kill
+                </div>
+                <p style="font-size: 13px; color: var(--color-text-muted); margin-bottom: 15px; line-height: 1.4;">
+                    Your Wi-Fi adapter is soft-blocked or disabled on the host system. Click <strong>Attempt RF-Unblock</strong> to trigger automatic hardware unblocking, or run <code>sudo rfkill unblock wifi</code> directly on your host terminal.
+                </p>
+            </div>
+            <div class="modal-footer" style="display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid var(--border-color); padding-top: 15px;">
+                <button class="btn btn-secondary" id="btn-dismiss-rfkill">Dismiss</button>
+                <button class="btn btn-primary" id="btn-unblock-rfkill" style="background: var(--color-danger); border-color: var(--color-danger);">
+                    <i class="fa-solid fa-bolt"></i> Attempt RF-Unblock Now
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+
+</html>
