@@ -566,11 +566,8 @@ async fn update_credentials(
         let token_str = token.trim();
         if !token_str.is_empty() {
             // Strip "token:" prefix if user pasted it directly
-            let clean_token = if token_str.starts_with("token:") {
-                &token_str[6..]
-            } else {
-                token_str
-            };
+            let clean_token = token_str.strip_prefix("token:").unwrap_or(token_str);
+
 
             tracing::info!("Attempting to exchange NordVPN Access Token for WireGuard key...");
             let curl_res = Command::new("curl")
