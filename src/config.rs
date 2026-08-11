@@ -114,6 +114,12 @@ impl ConfigManager {
                 let mut wireguard_private_key = None;
 
                 if fallback_path.exists() {
+                    // Best-effort: lock the plaintext fallback file to owner-only.
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        let _ = fs::set_permissions(&fallback_path, fs::Permissions::from_mode(0o600));
+                    }
                     if let Ok(content) = fs::read_to_string(&fallback_path) {
                         for line in content.lines() {
                             let parts: Vec<&str> = line.splitn(2, '=').collect();

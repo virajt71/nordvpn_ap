@@ -4,7 +4,8 @@ use axum::http::Method;
 use std::env;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tower_http::cors::{Any, CorsLayer};
+use axum::http::HeaderValue;
+use tower_http::cors::{Any, AllowOrigin, CorsLayer};
 use tower_http::services::{ServeDir, ServeFile};
 use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -72,11 +73,25 @@ async fn main() {
         stack_tx,
     };
 
-    // CORS configuration
-    let cors = CorsLayer::new()
-        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
-        .allow_headers(Any)
-        .allow_origin(Any);
+    // CORS configuration — only allow explicit origins; no env => send no ACAO (browser blocks cross-origin).
+    // ponytail: safe default is deny; set AP_CORS_ORIGINS="http://host:port,..." to permit a frontend.
+    let cors = match std::env::var("AP_CORS_ORIGINS") {
+        Ok(val) if !val.trim().is_empty() => {
+            let origins: Vec<HeaderValue> = val
+                .split(',')
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| HeaderValue::from_str(s).expect("invalid AP_CORS_ORIGINS value"))
+                .collect();
+            CorsLayer::new()
+                .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+                .allow_headers(Any)
+                .allow_origin(AllowOrigin::list(origins))
+        }
+        _ => CorsLayer::new()
+            .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+            .allow_headers(Any),
+    };
 
     // Static files configuration
     let static_dir = project_root.join("static");
@@ -84,8 +99,13 @@ async fn main() {
 
     info!("Static directory: {:?}", static_dir);
 
+    let api_token = std::env::var("AP_API_TOKEN").ok().filter(|s| !s.trim().is_empty());
+    if api_token.is_none() {
+        warn!("AP_API_TOKEN not set — /api endpoints are unauthenticated. Set it to require a bearer token.");
+    }
+
     // Create routes
-    let app = api::create_router(state)
+    let app = api::create_router(state, api_token)
         .layer(cors)
         .layer(tower_http::trace::TraceLayer::new_for_http())
         .nest_service("/static", ServeDir::new(&static_dir))

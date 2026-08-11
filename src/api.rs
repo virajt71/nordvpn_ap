@@ -4,9 +4,10 @@ use crate::wifi;
 use axum::{
     extract::{
         ws::{Message, WebSocket, WebSocketUpgrade},
-        Path, Query, State,
+        Path, Query, Request, State,
     },
-    http::StatusCode,
+    http::{header, StatusCode},
+    middleware::{self, Next},
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -145,6 +146,34 @@ async fn add_security_headers(
     response
 }
 
+// ponytail: bearer gate is opt-in via AP_API_TOKEN; when unset we pass through (dev) so the
+// service isn't bricked. prod upgrade path: return 401 instead of `true` in the None branch.
+async fn require_auth(
+    State(token): State<Option<String>>,
+    req: Request,
+    next: Next,
+) -> axum::response::Response {
+    let authorized = match &token {
+        Some(expected) => req
+            .headers()
+            .get(header::AUTHORIZATION)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v == format!("Bearer {}", expected))
+            .unwrap_or(false),
+        None => true,
+    };
+    if authorized {
+        next.run(req).await
+    } else {
+        (
+            StatusCode::UNAUTHORIZED,
+            [(header::WWW_AUTHENTICATE, "Bearer")],
+            "missing or invalid bearer token",
+        )
+            .into_response()
+    }
+}
+
 pub fn start_12h_reconnect_scheduler(state: AppState) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
@@ -185,7 +214,7 @@ pub fn start_12h_reconnect_scheduler(state: AppState) {
     });
 }
 
-pub fn create_router(state: AppState) -> Router {
+pub fn create_router(state: AppState, api_token: Option<String>) -> Router {
     start_12h_reconnect_scheduler(state.clone());
 
     let api_routes = Router::new()
@@ -204,10 +233,12 @@ pub fn create_router(state: AppState) -> Router {
         .route("/rfkill/unblock", post(unblock_rfkill))
         .route("/health", get(get_health));
 
+    let api_routes = api_routes.layer(middleware::from_fn_with_state(api_token, require_auth));
+
     Router::new()
         .route("/ws/stacks", get(stream_stacks))
         .nest("/api", api_routes)
-        .layer(axum::middleware::from_fn(add_security_headers))
+        .layer(middleware::from_fn(add_security_headers))
         .with_state(state)
 }
 
@@ -545,9 +576,6 @@ async fn get_credentials(State(state): State<AppState>) -> impl IntoResponse {
         "has_openvpn_user": creds.openvpn_user.is_some() && !creds.openvpn_user.as_ref().unwrap().is_empty(),
         "has_openvpn_password": creds.openvpn_password.is_some() && !creds.openvpn_password.as_ref().unwrap().is_empty(),
         "has_wireguard_private_key": creds.wireguard_private_key.is_some() && !creds.wireguard_private_key.as_ref().unwrap().is_empty(),
-        "openvpn_user": creds.openvpn_user.unwrap_or_default(),
-        "openvpn_password": creds.openvpn_password.unwrap_or_default(),
-        "wireguard_private_key": creds.wireguard_private_key.unwrap_or_default(),
     }))
 }
 
@@ -623,10 +651,7 @@ async fn update_credentials(
         return (StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": e }))).into_response();
     }
 
-    Json(json!({
-        "success": true,
-        "wireguard_private_key": creds.wireguard_private_key
-    })).into_response()
+    Json(json!({ "success": true })).into_response()
 }
 
 // ─── Utils Handlers ──────────────────────────────────────────────────────────
@@ -665,19 +690,13 @@ async fn list_vpn_locations() -> impl IntoResponse {
 }
 
 async fn unblock_rfkill() -> impl IntoResponse {
+    // wifi-ap runs `privileged: true` + `pid: host`, so rfkill here already reaches the host RF
+    // subsystem. No nsenter into init's namespaces — that's a needless container->host pivot surface.
     let output = Command::new("rfkill").args(["unblock", "wifi"]).output();
     let output_all = Command::new("rfkill").args(["unblock", "all"]).output();
-    let host_output = Command::new("nsenter")
-        .args(["-t", "1", "-m", "-u", "-i", "-n", "--", "rfkill", "unblock", "wifi"])
-        .output();
-    let host_output_all = Command::new("nsenter")
-        .args(["-t", "1", "-m", "-u", "-i", "-n", "--", "rfkill", "unblock", "all"])
-        .output();
 
     let success = output.map(|o| o.status.success()).unwrap_or(false)
-        || output_all.map(|o| o.status.success()).unwrap_or(false)
-        || host_output.map(|o| o.status.success()).unwrap_or(false)
-        || host_output_all.map(|o| o.status.success()).unwrap_or(false);
+        || output_all.map(|o| o.status.success()).unwrap_or(false);
 
     Json(json!({
         "success": success,

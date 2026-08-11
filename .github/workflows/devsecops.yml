@@ -38,6 +38,11 @@ jobs:
         with:
           dockerfile: Dockerfile
 
+      - name: Secret Scanning (Gitleaks)
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
+
   # 2. Container Security & Image Scan
   container-security:
     name: Container Security & Vulnerability Scan
@@ -55,7 +60,7 @@ jobs:
         with:
           image-ref: 'ap-manager:local'
           format: 'table'
-          exit-code: '0' # ponytail: exit-code set to 0 for non-blocking report output; upgrade path: change to 1 to block PRs on CRITICAL vulns
+          exit-code: '1' # block PRs on fixable CRITICAL/HIGH; ignore-unfixed keeps it to patched CVEs
           ignore-unfixed: true
           vuln-type: 'os,library'
           severity: 'CRITICAL,HIGH'
@@ -89,7 +94,7 @@ jobs:
         uses: zaproxy/action-baseline@v0.14.0
         with:
           target: 'http://127.0.0.1:42918/'
-          fail_action: false # ponytail: non-blocking baseline scan; upgrade path: set fail_action: true once target headers are hardened
+          fail_action: true # baseline scan now fails PR on new/regressed findings; raise threshold via rules_file if too noisy
 
       - name: Stop Service
         if: always()
