@@ -33,7 +33,7 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run Cargo Audit (Vulnerability Scanner)
-        uses: rustsec/audit-check@v1.4.1
+        uses: rustsec/audit-check@v2.0.0
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
@@ -43,7 +43,7 @@ jobs:
           dockerfile: Dockerfile
 
       - name: Secret Scanning (Gitleaks)
-        uses: gitleaks/gitleaks-action@v2
+        uses: gitleaks/gitleaks-action@v3
         env:
           GITLEAKS_ENABLE_UPLOAD_ARTIFACT: "false"
 
@@ -95,13 +95,12 @@ jobs:
           curl -sI http://127.0.0.1:42918/api/status || true
 
       - name: DAST - OWASP ZAP Baseline Scan
-        uses: zaproxy/action-baseline@v0.14.0
+        uses: zaproxy/action-baseline@v0.15.0
         with:
           # action-baseline executes with --network=host on Linux runners, sharing the runner host network stack, so 127.0.0.1 reaches ap-manager directly.
           target: 'http://127.0.0.1:42918/'
           allow_issue_writing: false
           fail_action: false
-
 
       - name: Stop Service
         if: always()
