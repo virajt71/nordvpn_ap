@@ -33,7 +33,7 @@ jobs:
         run: cargo clippy --all-targets --all-features -- -D warnings
 
       - name: Run Cargo Audit (Vulnerability Scanner)
-        uses: rustsec/audit-check@v2.0.0
+        uses: actions-rust-lang/audit@v1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
