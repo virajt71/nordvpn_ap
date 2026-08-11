@@ -143,8 +143,12 @@ async fn add_security_headers(
     headers.insert("X-Content-Type-Options", axum::http::HeaderValue::from_static("nosniff"));
     headers.insert("X-Frame-Options", axum::http::HeaderValue::from_static("DENY"));
     headers.insert("X-XSS-Protection", axum::http::HeaderValue::from_static("1; mode=block"));
+    headers.insert("Content-Security-Policy", axum::http::HeaderValue::from_static("default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: wss:;"));
+    headers.insert("Permissions-Policy", axum::http::HeaderValue::from_static("geolocation=(), microphone=(), camera=()"));
+    headers.insert("Referrer-Policy", axum::http::HeaderValue::from_static("strict-origin-when-cross-origin"));
     response
 }
+
 
 // ponytail: bearer gate is opt-in via AP_API_TOKEN; when unset we pass through (dev) so the
 // service isn't bricked. prod upgrade path: return 401 instead of `true` in the None branch.

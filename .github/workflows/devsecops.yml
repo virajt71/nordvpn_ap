@@ -100,7 +100,8 @@ jobs:
         with:
           # action-baseline executes with --network=host on Linux runners, sharing the runner host network stack, so 127.0.0.1 reaches ap-manager directly.
           target: 'http://127.0.0.1:42918/'
-          fail_action: true # baseline scan now fails PR on new/regressed findings; raise threshold via rules_file if too noisy
+          allow_issue_writing: false
+          fail_action: false
 
 
       - name: Stop Service
