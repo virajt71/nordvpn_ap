@@ -1,0 +1,99 @@
+name: DevSecOps Pipeline
+
+on:
+  push:
+    branches: [ UI/UX, improvement, develop ]
+  pull_request:
+    branches: [ UI/UX, improvement, develop ]
+  workflow_dispatch:
+
+
+jobs:
+  # 1. SAST & Static Analysis
+  sast-and-lint:
+    name: SAST & Linting
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Cache Cargo dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Run Cargo Clippy (Rust SAST & Linting)
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Run Cargo Audit (Vulnerability Scanner)
+        uses: rustsec/audit-check@v1.4.1
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Lint Dockerfile (Hadolint)
+        uses: hadolint/hadolint-action@v3.1.0
+        with:
+          dockerfile: Dockerfile
+
+  # 2. Container Security & Image Scan
+  container-security:
+    name: Container Security & Vulnerability Scan
+    runs-on: ubuntu-latest
+    needs: sast-and-lint
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build Docker Image
+        run: docker build -t ap-manager:local .
+
+      - name: Run Trivy Vulnerability Scanner (Image SAST)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: 'ap-manager:local'
+          format: 'table'
+          exit-code: '0' # ponytail: exit-code set to 0 for non-blocking report output; upgrade path: change to 1 to block PRs on CRITICAL vulns
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+  # 3. DAST (Dynamic Application Security Testing)
+  dast-scan:
+    name: DAST & API Security Scan
+    runs-on: ubuntu-latest
+    needs: container-security
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build and start ap-manager service
+        run: |
+          cargo build --release
+          ./target/release/ap-manager &
+          echo $! > service.pid
+          sleep 3
+
+      - name: DAST - REST Endpoint Health & Security Check
+        run: |
+          echo "Testing REST endpoints for unexpected errors or security misconfigurations..."
+          curl -sI http://127.0.0.1:42918/ | grep -E "200 OK|HTTP"
+          curl -sI http://127.0.0.1:42918/api/status || true
+
+      - name: DAST - OWASP ZAP Baseline Scan
+        uses: zaproxy/action-baseline@v0.14.0
+        with:
+          target: 'http://127.0.0.1:42918/'
+          fail_action: false # ponytail: non-blocking baseline scan; upgrade path: set fail_action: true once target headers are hardened
+
+      - name: Stop Service
+        if: always()
+        run: |
+          if [ -f service.pid ]; then
+            kill $(cat service.pid) || true
+          fi

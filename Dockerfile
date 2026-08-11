@@ -36,4 +36,9 @@ COPY --from=builder /usr/src/ap-manager/target/release/ap-manager /usr/local/bin
 
 EXPOSE 42918
 
+# ponytail: HEALTHCHECK uses curl against health/static endpoint; upgrade path: dedicated authenticated /healthz endpoint if auth added
+HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
+  CMD curl -f http://localhost:42918/ || exit 1
+
 ENTRYPOINT ["/usr/local/bin/ap-manager"]
+
