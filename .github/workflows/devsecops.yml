@@ -12,11 +12,6 @@ permissions:
   contents: read
   security-events: write
 
-env:
-  ACTIONS_ALLOW_USE_UNSECURE_NODE_VERSION: "true"
-
-
-
 jobs:
   # 1. SAST & Static Analysis
   sast-and-lint:
@@ -24,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -59,7 +54,7 @@ jobs:
     needs: sast-and-lint
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Build Docker Image
         run: docker build -t ap-manager:local .
@@ -81,7 +76,7 @@ jobs:
     needs: container-security
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
