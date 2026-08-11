@@ -7,6 +7,11 @@ on:
     branches: [ UI/UX, improvement, develop ]
   workflow_dispatch:
 
+# audit-check uploads SARIF; without security-events:write it fails the job.
+permissions:
+  contents: read
+  security-events: write
+
 
 jobs:
   # 1. SAST & Static Analysis
@@ -93,7 +98,9 @@ jobs:
       - name: DAST - OWASP ZAP Baseline Scan
         uses: zaproxy/action-baseline@v0.14.0
         with:
-          target: 'http://127.0.0.1:42918/'
+          # ZAP runs in its own container, so 127.0.0.1 is the ZAP container, not the runner where
+          # ap-manager listens. host.docker.internal reaches the runner on GitHub Linux runners.
+          target: 'http://host.docker.internal:42918/'
           fail_action: true # baseline scan now fails PR on new/regressed findings; raise threshold via rules_file if too noisy
 
       - name: Stop Service
