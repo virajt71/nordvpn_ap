@@ -237,7 +237,7 @@ impl DockerManager {
                 .args([
                     "run", "--rm", 
                     "-v", &format!("{}:/mnt/country", self.project_root.join("country").to_string_lossy()),
-                    "debian:bullseye-slim", "rm", "-rf", &format!("/mnt/country/{}", id)
+                    "debian:bookworm-slim", "rm", "-rf", &format!("/mnt/country/{}", id)
                 ])
                 .output();
             let _ = fs::remove_dir_all(&stack_dir);
