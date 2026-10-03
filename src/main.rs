@@ -124,7 +124,38 @@ async fn main() {
         .await
         .expect("Failed to bind TcpListener");
 
-    axum::serve(listener, app).await.expect("Axum server run failed");
+    axum::serve(listener, app)
+        .with_graceful_shutdown(shutdown_signal())
+        .await
+        .expect("Axum server run failed");
+
+    info!("AP Manager Backend shut down gracefully.");
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {},
+        _ = terminate => {},
+    }
+
+    info!("Shutdown signal received, starting graceful termination...");
 }
 
 fn auto_detect_host_dir(defaulted: &mut bool, project_root: &std::path::Path) -> String {

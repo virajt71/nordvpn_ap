@@ -261,19 +261,35 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     }
 
     let mut rx = state.stack_tx.subscribe();
+    let mut ping_interval = tokio::time::interval(std::time::Duration::from_secs(30));
+
     loop {
-        match rx.recv().await {
-            Ok(snap) => {
-                let msg = match serde_json::to_string(&snap) {
-                    Ok(m) => m,
-                    Err(_) => continue,
-                };
-                if socket.send(Message::Text(msg)).await.is_err() {
+        tokio::select! {
+            result = rx.recv() => {
+                match result {
+                    Ok(snap) => {
+                        let msg = match serde_json::to_string(&snap) {
+                            Ok(m) => m,
+                            Err(_) => continue,
+                        };
+                        if socket.send(Message::Text(msg)).await.is_err() {
+                            break; // client gone
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(_)) => continue,
+                    Err(broadcast::error::RecvError::Closed) => break,
+                }
+            }
+            _ = ping_interval.tick() => {
+                if socket.send(Message::Ping(vec![])).await.is_err() {
                     break; // client gone
                 }
             }
-            Err(broadcast::error::RecvError::Lagged(_)) => continue, // ponytail: drop stale, client resyncs on next
-            Err(broadcast::error::RecvError::Closed) => break,
+            msg = socket.recv() => {
+                if msg.is_none() {
+                    break; // client closed socket
+                }
+            }
         }
     }
 }

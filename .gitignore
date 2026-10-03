@@ -1,16 +1,21 @@
-# Ignore secrets
-.agent
+# Secrets and local config
 .env
 .env.credentials
 
-# Ignore gluetun state and server configs
-country/
-
-# MacOS/System
-.DS_Store
-
-# Rust build output
+# Rust build target
 /target
 
-# API state & credentials persistence
+# Frontend dependencies and build caches
+frontend/node_modules
+frontend/.tanstack
+frontend/.output
+frontend/dist
+dist-spa
+
+# API state & generated stack persistence
 /data
+country/
+
+# MacOS & System files
+.DS_Store
+*.log
