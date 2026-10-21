@@ -60,6 +60,14 @@ pub struct CreateStackInput {
     pub ap_channel_width: Option<u8>,
     pub ap_security: Option<String>,
     pub auto_reconnect_12h: Option<bool>,
+    #[serde(default)]
+    pub mode: Option<String>,
+    #[serde(default)]
+    pub uplink_iface: Option<String>,
+    #[serde(default)]
+    pub uplink_ssid: Option<String>,
+    #[serde(default)]
+    pub uplink_password: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -374,6 +382,10 @@ async fn create_stack(
         ap_security: input.ap_security.unwrap_or_else(|| "wpa2".to_string()),
         auto_reconnect_12h: input.auto_reconnect_12h.unwrap_or(false),
         last_reconnect_at: now,
+        mode: input.mode.unwrap_or_else(|| "ap".to_string()),
+        uplink_iface: input.uplink_iface.unwrap_or_default(),
+        uplink_ssid: input.uplink_ssid.unwrap_or_default(),
+        uplink_password: input.uplink_password.unwrap_or_default(),
     };
 
     // Check collisions
@@ -457,6 +469,10 @@ async fn update_stack(
     if let Some(width) = input.ap_channel_width { updated.ap_channel_width = width; }
     if let Some(sec) = input.ap_security { updated.ap_security = sec; }
     if let Some(auto_rec) = input.auto_reconnect_12h { updated.auto_reconnect_12h = auto_rec; }
+    if let Some(m) = input.mode { updated.mode = m; }
+    if let Some(u) = input.uplink_iface { updated.uplink_iface = u; }
+    if let Some(u) = input.uplink_ssid { updated.uplink_ssid = u; }
+    if let Some(u) = input.uplink_password { updated.uplink_password = u; }
 
     // Re-verify collisions (excluding itself)
     for (i, s) in stacks.iter().enumerate() {

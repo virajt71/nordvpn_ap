@@ -55,6 +55,22 @@ impl DockerManager {
 
         let location_env = resolve_location_env(stack);
 
+        // Repeater mode: hand the WiFi uplink (STA) params to the AP container, and
+        // relax its depends_on to service_started. gluetun needs the uplink's internet
+        // to bootstrap the VPN tunnel, and the AP container is what brings the uplink
+        // up -> waiting for gluetun `healthy` would deadlock.
+        let uplink_env = if stack.mode == "repeater" {
+            format!(
+                "      - MODE=repeater\n      - UPLINK_IFACE={ul_iface}\n      - UPLINK_SSID={ul_ssid}\n      - UPLINK_PASSWORD={ul_pass}\n",
+                ul_iface = stack.uplink_iface,
+                ul_ssid = stack.uplink_ssid,
+                ul_pass = stack.uplink_password,
+            )
+        } else {
+            String::new()
+        };
+        let wifi_ap_dep = if stack.mode == "repeater" { "service_started" } else { "service_healthy" };
+
         // Template string
         let compose_content = format!(
             r#"services:
@@ -126,9 +142,9 @@ impl DockerManager {
       - AP_SECURITY={ap_security}
       - ROUTING_TABLE={routing_table}
       - COUNTRY={id}
-    depends_on:
+{uplink_env}    depends_on:
       gluetun:
-        condition: service_healthy
+        condition: {wifi_ap_dep}
     restart: unless-stopped
 "#,
             id = stack.id,
@@ -150,6 +166,8 @@ impl DockerManager {
             ap_subnet = stack.subnet,
             ap_security = stack.ap_security,
             routing_table = stack.routing_table,
+            uplink_env = uplink_env,
+            wifi_ap_dep = wifi_ap_dep,
         );
 
         let compose_path = stack_dir.join("docker-compose.yaml");
@@ -349,6 +367,7 @@ mod tests {
             ap_security: "wpa2".to_string(),
             auto_reconnect_12h: false,
             last_reconnect_at: 0,
+        ..Default::default()
         };
         assert_eq!(resolve_location_env(&stack), "SERVER_COUNTRIES=india");
     }
@@ -371,6 +390,7 @@ mod tests {
             ap_security: "wpa2".to_string(),
             auto_reconnect_12h: false,
             last_reconnect_at: 0,
+        ..Default::default()
         };
         assert_eq!(resolve_location_env(&stack), "SERVER_COUNTRIES=india");
     }
@@ -393,6 +413,7 @@ mod tests {
             ap_security: "wpa2".to_string(),
             auto_reconnect_12h: false,
             last_reconnect_at: 0,
+        ..Default::default()
         };
         assert_eq!(resolve_location_env(&stack), "SERVER_CITIES=Seattle");
     }

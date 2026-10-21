@@ -13,6 +13,12 @@ AP_SECURITY="${AP_SECURITY:-wpa2}"
 COUNTRY="${COUNTRY:-vpn0}"
 # ROUTING_TABLE must not collide across instances; pass explicitly from .env
 ROUTING_TABLE="${ROUTING_TABLE:-100}"
+# Repeater mode: connect UPLINK_IFACE as a WiFi station (STA) to a parent AP for
+# internet, then broadcast AP_IFACE as the tunneled AP. mode defaults to "ap".
+MODE="${MODE:-ap}"
+UPLINK_IFACE="${UPLINK_IFACE:-}"
+UPLINK_SSID="${UPLINK_SSID:-}"
+UPLINK_PASSWORD="${UPLINK_PASSWORD:-}"
 
 TAG="[wifi-ap/${COUNTRY}]"
 
@@ -31,12 +37,32 @@ find_vpn_pid() {
 }
 
 write_hostapd_conf() {
+    local hostapd_hw_mode="g"
+    case "${AP_HW_MODE,,}" in
+        a|ac)
+            hostapd_hw_mode="a"
+            ;;
+        ax)
+            if [ "$AP_CHANNEL" -gt 14 ] 2>/dev/null; then
+                hostapd_hw_mode="a"
+            else
+                hostapd_hw_mode="g"
+            fi
+            ;;
+        b)
+            hostapd_hw_mode="b"
+            ;;
+        *)
+            hostapd_hw_mode="g"
+            ;;
+    esac
+
     cat > /tmp/hostapd-${COUNTRY}.conf <<EOF
 interface=${AP_IFACE}
 driver=nl80211
 ssid=${AP_SSID}
 channel=${AP_CHANNEL}
-hw_mode=${AP_HW_MODE}
+hw_mode=${hostapd_hw_mode}
 ieee80211n=1
 wmm_enabled=1
 auth_algs=1
@@ -92,10 +118,10 @@ logger_stdout_level=2
 EOF
 
     if [[ "$AP_HW_MODE" == "a" || "$AP_HW_MODE" == "ac" || "$AP_HW_MODE" == "ax" ]]; then
-        {
-            echo "ieee80211ac=1"
-            [[ "$AP_HW_MODE" == "ax" ]] && echo "ieee80211ax=1"
-        } >> /tmp/hostapd-${COUNTRY}.conf
+        echo "ieee80211ac=1" >> /tmp/hostapd-${COUNTRY}.conf
+        if [[ "$AP_HW_MODE" == "ax" ]]; then
+            echo "ieee80211ax=1" >> /tmp/hostapd-${COUNTRY}.conf
+        fi
     fi
 }
 
@@ -112,6 +138,43 @@ dhcp-option=6,103.86.96.100,103.86.99.100
 port=0
 dhcp-leasefile=/tmp/dnsmasq-${COUNTRY}.leases
 EOF
+}
+
+uplink_ready() {
+[ -n "$UPLINK_IFACE" ] && ip -o -4 addr show "$UPLINK_IFACE" 2>/dev/null | grep -q "inet"
+}
+
+# Connect UPLINK_IFACE to the parent AP as a station and DHCP a route to the internet.
+# This is the WAN for repeater mode; gluetun bootstraps its VPN through it.
+connect_uplink() {
+[ -n "$UPLINK_IFACE" ] || return 0
+echo "  ${TAG} Uplink (repeater): associating $UPLINK_IFACE to '${UPLINK_SSID}'..."
+
+nsenter -t 1 -m -u -i -n -- nmcli dev set "$UPLINK_IFACE" managed no 2>/dev/null || true
+rfkill unblock wifi 2>/dev/null || true
+nsenter -t 1 -m -u -i -n -- rfkill unblock wifi 2>/dev/null || true
+
+ip link set "$UPLINK_IFACE" down 2>/dev/null || true
+ip addr flush dev "$UPLINK_IFACE" 2>/dev/null || true
+mkdir -p /var/run/wpa_supplicant
+
+if [ -n "$UPLINK_PASSWORD" ]; then
+    wpa_passphrase "$UPLINK_SSID" "$UPLINK_PASSWORD" > "/tmp/uplink-${COUNTRY}.conf"
+    pkill -f "wpa_supplicant -i $UPLINK_IFACE" 2>/dev/null || true
+    wpa_supplicant -B -i "$UPLINK_IFACE" -c "/tmp/uplink-${COUNTRY}.conf" -f "/tmp/wpa-${COUNTRY}.log"
+else
+    pkill -f "wpa_supplicant -i $UPLINK_IFACE" 2>/dev/null || true
+fi
+
+for i in $(seq 1 30); do
+    if uplink_ready; then
+        echo "  ${TAG} Uplink up: $(ip -o -4 addr show "$UPLINK_IFACE" | awk '{print $4}')  (host default route via uplink)"
+        return 0
+    fi
+    sleep 1
+done
+echo "  ${TAG} Uplink has no DHCP lease yet."
+return 1
 }
 
 setup_routing() {
@@ -178,12 +241,14 @@ cleanup() {
     pkill -f "dnsmasq --conf-file=/tmp/dnsmasq-${COUNTRY}.conf" 2>/dev/null || true
     ip rule del from "$AP_SUBNET" lookup $ROUTING_TABLE 2>/dev/null || true
     ip route flush table $ROUTING_TABLE 2>/dev/null || true
-    iptables -t nat -D PREROUTING -i "$AP_IFACE" -p udp --dport 53 -d 103.86.96.100 -j DNAT --to-destination "$gip:53" 2>/dev/null || true
-    iptables -t nat -D PREROUTING -i "$AP_IFACE" -p tcp --dport 53 -d 103.86.96.100 -j DNAT --to-destination "$gip:53" 2>/dev/null || true
-    iptables -t nat -D PREROUTING -i "$AP_IFACE" -p udp --dport 53 -d 103.86.99.100 -j DNAT --to-destination "$gip:53" 2>/dev/null || true
-    iptables -t nat -D PREROUTING -i "$AP_IFACE" -p tcp --dport 53 -d 103.86.99.100 -j DNAT --to-destination "$gip:53" 2>/dev/null || true
-    iptables -t nat -D PREROUTING -i "$AP_IFACE" -p tcp --dport 3000 -d "$AP_IP" -j DNAT --to-destination "$gip:3000" 2>/dev/null || true
-    iptables -t nat -D PREROUTING -i "$AP_IFACE" -p tcp --dport 80 -d "$AP_IP" -j DNAT --to-destination "$gip:80" 2>/dev/null || true
+    if [ -n "${gip:-}" ]; then
+        iptables -t nat -D PREROUTING -i "$AP_IFACE" -p udp --dport 53 -d 103.86.96.100 -j DNAT --to-destination "$gip:53" 2>/dev/null || true
+        iptables -t nat -D PREROUTING -i "$AP_IFACE" -p tcp --dport 53 -d 103.86.96.100 -j DNAT --to-destination "$gip:53" 2>/dev/null || true
+        iptables -t nat -D PREROUTING -i "$AP_IFACE" -p udp --dport 53 -d 103.86.99.100 -j DNAT --to-destination "$gip:53" 2>/dev/null || true
+        iptables -t nat -D PREROUTING -i "$AP_IFACE" -p tcp --dport 53 -d 103.86.99.100 -j DNAT --to-destination "$gip:53" 2>/dev/null || true
+        iptables -t nat -D PREROUTING -i "$AP_IFACE" -p tcp --dport 3000 -d "$AP_IP" -j DNAT --to-destination "$gip:3000" 2>/dev/null || true
+        iptables -t nat -D PREROUTING -i "$AP_IFACE" -p tcp --dport 80 -d "$AP_IP" -j DNAT --to-destination "$gip:80" 2>/dev/null || true
+    fi
     ip addr flush dev "$AP_IFACE" 2>/dev/null || true
     ip link set "$AP_IFACE" down 2>/dev/null || true
     nsenter -t 1 -m -u -i -n -- nmcli dev set "$AP_IFACE" managed yes 2>/dev/null || true

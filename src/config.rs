@@ -4,7 +4,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::info;
 
-#[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]
+#[derive(Debug, Serialize, Deserialize, Clone, PartialEq, Default)]
 pub struct Stack {
     pub id: String, // unique alphanumeric stack identifier (corresponds to COUNTRY name in script)
     pub ssid: String,
@@ -25,7 +25,17 @@ pub struct Stack {
     pub auto_reconnect_12h: bool,
     #[serde(default)]
     pub last_reconnect_at: u64,
+    #[serde(default = "default_ap_mode")]
+    pub mode: String, // "ap" = single-radio AP; "repeater" = WiFi uplink (STA) + WiFi AP
+    #[serde(default)]
+    pub uplink_iface: String, // repeater: radio that connects to the parent/upstream AP
+    #[serde(default)]
+    pub uplink_ssid: String,
+    #[serde(default)]
+    pub uplink_password: String,
 }
+
+fn default_ap_mode() -> String { "ap".to_string() }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Credentials {
@@ -231,7 +241,8 @@ mod tests {
                 ap_security: "wpa2".to_string(),
                 auto_reconnect_12h: false,
                 last_reconnect_at: 0,
-            },
+                ..Default::default()
+                },
             Stack {
                 id: "test2".to_string(),
                 ssid: "ssid2".to_string(),
@@ -248,7 +259,8 @@ mod tests {
                 ap_security: "wpa2".to_string(),
                 auto_reconnect_12h: false,
                 last_reconnect_at: 0,
-            },
+                ..Default::default()
+                },
         ];
         let (subnet, table) = manager.allocate_resources(&stacks);
         assert_eq!(subnet, "192.168.62.0/24");
