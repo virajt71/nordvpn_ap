@@ -59,15 +59,24 @@ pub struct CreateStackInput {
     pub ap_hw_mode: Option<String>,
     pub ap_channel_width: Option<u8>,
     pub ap_security: Option<String>,
+    #[serde(default)]
+    pub auto_reconnect_8h: Option<bool>,
+    #[serde(default)]
     pub auto_reconnect_12h: Option<bool>,
     #[serde(default)]
     pub mode: Option<String>,
+    #[serde(default)]
+    pub vpn_enabled: Option<bool>,
     #[serde(default)]
     pub uplink_iface: Option<String>,
     #[serde(default)]
     pub uplink_ssid: Option<String>,
     #[serde(default)]
     pub uplink_password: Option<String>,
+    #[serde(default)]
+    pub adguard_dns: Option<String>,
+    #[serde(default)]
+    pub adguard_dns_port: Option<u16>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -78,21 +87,25 @@ pub struct UpdateCredentialsInput {
     pub nordvpn_token: Option<String>,
 }
 
-const CONTAINER_ROLES: &[&str] = &["gluetun", "adguard", "wifi-ap"];
+// Inspect stack containers dynamically based on stack features and derive aggregate status.
+fn aggregate_status(state: &AppState, stack: &Stack) -> (Vec<ContainerStatusDto>, String) {
+    let mut expected_roles = vec!["wifi-ap"];
+    if stack.vpn_enabled {
+        expected_roles.push("gluetun");
+        if stack.adguard_dns.trim().is_empty() {
+            expected_roles.push("adguard");
+        }
+    }
 
-// Inspect the three stack containers and derive the aggregate stack status.
-fn aggregate_status(state: &AppState, id: &str) -> (Vec<ContainerStatusDto>, String) {
     let mut containers = Vec::new();
     let mut running = 0;
-    let mut _present = 0;
-    for role in CONTAINER_ROLES {
-        if let Some(st) = state.docker_manager.inspect_container_status(&format!("{}-{}", role, id)) {
-            _present += 1;
+    for role in &expected_roles {
+        if let Some(st) = state.docker_manager.inspect_container_status(&format!("{}-{}", role, stack.id)) {
             if st == "running" { running += 1; }
             containers.push(ContainerStatusDto { name: role.to_string(), status: st });
         }
     }
-    let status = if running == CONTAINER_ROLES.len() {
+    let status = if running == expected_roles.len() {
         "running"
     } else if running == 0 {
         "stopped"
@@ -110,8 +123,8 @@ fn build_snapshot(state: &AppState) -> Vec<StackStatusDto> {
     stacks
         .into_iter()
         .map(|s| {
-            let (containers, status) = aggregate_status(state, &s.id);
-            let vpn_ip = if status == "running" {
+            let (containers, status) = aggregate_status(state, &s);
+            let vpn_ip = if status == "running" && s.vpn_enabled {
                 state.docker_manager.get_vpn_ip(&s.id)
             } else {
                 None
@@ -129,9 +142,32 @@ pub fn publish_stacks(state: &AppState) {
 
 // Returns the first collision error against an existing stack, if any.
 fn collision_error(existing: &Stack, candidate: &Stack) -> Option<String> {
+    if candidate.mode == "repeater"
+        && !candidate.uplink_iface.is_empty()
+        && candidate.uplink_iface == candidate.ap_iface
+    {
+        return Some("Uplink interface cannot be the same as the AP interface".to_string());
+    }
+
+    // Lock check: AP interface cannot be used by another stack as AP or Uplink
     if existing.ap_iface == candidate.ap_iface {
-        Some(format!("WiFi Interface '{}' is already in use by stack '{}'", candidate.ap_iface, existing.id))
-    } else if existing.subnet == candidate.subnet {
+        return Some(format!("WiFi Interface '{}' is already in use by stack '{}'", candidate.ap_iface, existing.id));
+    }
+    if !existing.uplink_iface.is_empty() && existing.uplink_iface == candidate.ap_iface {
+        return Some(format!("WiFi Interface '{}' is already in use as uplink by stack '{}'", candidate.ap_iface, existing.id));
+    }
+
+    // Lock check: Candidate Uplink interface cannot be used by another stack as AP or Uplink
+    if !candidate.uplink_iface.is_empty() {
+        if existing.ap_iface == candidate.uplink_iface {
+            return Some(format!("Uplink interface '{}' is already in use as AP by stack '{}'", candidate.uplink_iface, existing.id));
+        }
+        if !existing.uplink_iface.is_empty() && existing.uplink_iface == candidate.uplink_iface {
+            return Some(format!("Uplink interface '{}' is already in use as uplink by stack '{}'", candidate.uplink_iface, existing.id));
+        }
+    }
+
+    if existing.subnet == candidate.subnet {
         Some(format!("Subnet '{}' is already allocated", candidate.subnet))
     } else if existing.routing_table == candidate.routing_table {
         Some(format!("Routing table '{}' is already allocated", candidate.routing_table))
@@ -186,7 +222,7 @@ async fn require_auth(
     }
 }
 
-pub fn start_12h_reconnect_scheduler(state: AppState) {
+pub fn start_8h_reconnect_scheduler(state: AppState) {
     tokio::spawn(async move {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
         loop {
@@ -199,12 +235,22 @@ pub fn start_12h_reconnect_scheduler(state: AppState) {
             let mut stacks_to_restart = Vec::new();
             if let Ok(stacks) = state.config_manager.load_stacks() {
                 for stack in stacks {
-                    if stack.auto_reconnect_12h {
-                        let (_, status) = aggregate_status(&state, &stack.id);
+                    if stack.auto_reconnect_8h && stack.vpn_enabled {
+                        let (_, status) = aggregate_status(&state, &stack);
                         if status == "running" {
-                            let elapsed = now.saturating_sub(stack.last_reconnect_at);
-                            if elapsed >= 12 * 3600 {
-                                stacks_to_restart.push(stack.id);
+                            if stack.last_reconnect_at == 0 {
+                                // Baseline timestamp was uninitialized; record current start time
+                                if let Ok(mut s_list) = state.config_manager.load_stacks() {
+                                    if let Some(s) = s_list.iter_mut().find(|x| x.id == stack.id) {
+                                        s.last_reconnect_at = now;
+                                        let _ = state.config_manager.save_stacks(&s_list);
+                                    }
+                                }
+                            } else {
+                                let elapsed = now.saturating_sub(stack.last_reconnect_at);
+                                if elapsed >= 8 * 3600 {
+                                    stacks_to_restart.push(stack.id);
+                                }
                             }
                         }
                     }
@@ -212,7 +258,7 @@ pub fn start_12h_reconnect_scheduler(state: AppState) {
             }
 
             for id in stacks_to_restart {
-                tracing::info!("12-hour auto-reconnect triggering for stack: {}", id);
+                tracing::info!("8-hour auto-reconnect triggering for stack: {}", id);
                 let _ = state.docker_manager.restart_stack(&id);
                 if let Ok(mut stacks) = state.config_manager.load_stacks() {
                     if let Some(s) = stacks.iter_mut().find(|x| x.id == id) {
@@ -227,7 +273,7 @@ pub fn start_12h_reconnect_scheduler(state: AppState) {
 }
 
 pub fn create_router(state: AppState, api_token: Option<String>) -> Router {
-    start_12h_reconnect_scheduler(state.clone());
+    start_8h_reconnect_scheduler(state.clone());
 
     let api_routes = Router::new()
         // Stack routes
@@ -241,7 +287,9 @@ pub fn create_router(state: AppState, api_token: Option<String>) -> Router {
         .route("/credentials", get(get_credentials).patch(update_credentials))
         // Utils routes
         .route("/wifi/interfaces", get(list_wifi_interfaces))
+        .route("/wifi/scan", get(scan_wifi_networks))
         .route("/vpn/locations", get(list_vpn_locations))
+        .route("/dns/adguard/detect", get(detect_adguard_dns))
         .route("/rfkill/unblock", post(unblock_rfkill))
         .route("/health", get(get_health));
 
@@ -353,13 +401,55 @@ async fn create_stack(
         }
     }
 
+    // Auto-normalize hw_mode based on channel band
+    if ap_channel > 14 {
+        if ap_hw_mode == "g" || ap_hw_mode == "b" || ap_hw_mode.is_empty() {
+            ap_hw_mode = "a".to_string();
+        }
+    } else if ap_channel > 0 {
+        if ap_hw_mode == "a" || ap_hw_mode == "ac" {
+            ap_hw_mode = "g".to_string();
+        }
+    }
+
+    let mode = input.mode.unwrap_or_else(|| "ap".to_string());
+    let mut vpn_enabled = input.vpn_enabled.unwrap_or(true);
+    if mode == "repeater" {
+        vpn_enabled = false;
+    }
+    let uplink_iface = input.uplink_iface.unwrap_or_default();
+    let uplink_ssid = input.uplink_ssid.unwrap_or_default();
+    let uplink_password = input.uplink_password.unwrap_or_default();
+    let mut adguard_dns = input.adguard_dns.unwrap_or_default();
+    let mut adguard_dns_port = input.adguard_dns_port.unwrap_or(53);
+
+    // If repeater mode and adguard_dns is not explicitly provided, attempt to auto-detect running AdGuard Home
+    if mode == "repeater" && adguard_dns.trim().is_empty() {
+        if let Some((detected_ip, detected_port)) = state.docker_manager.detect_adguard_dns() {
+            adguard_dns = detected_ip;
+            adguard_dns_port = detected_port;
+        }
+    }
+
+    // Validation for repeater mode
+    if mode == "repeater" {
+        if uplink_iface.trim().is_empty() {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Uplink interface is required for repeater mode" }))).into_response();
+        }
+        if uplink_ssid.trim().is_empty() {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Uplink SSID is required for repeater mode" }))).into_response();
+        }
+    }
+
     let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
 
     let vpn_country = input
         .vpn_country
         .filter(|c| !c.is_empty())
         .unwrap_or_else(|| {
-            input.vpn_city.clone().unwrap_or_else(|| input.id.clone())
+            input.vpn_city.clone().unwrap_or_else(|| {
+                if vpn_enabled { input.id.clone() } else { "Direct".to_string() }
+            })
         });
 
     let vpn_city = input
@@ -380,12 +470,15 @@ async fn create_stack(
         ap_hw_mode,
         ap_channel_width,
         ap_security: input.ap_security.unwrap_or_else(|| "wpa2".to_string()),
-        auto_reconnect_12h: input.auto_reconnect_12h.unwrap_or(false),
+        auto_reconnect_8h: input.auto_reconnect_8h.or(input.auto_reconnect_12h).unwrap_or(false),
         last_reconnect_at: now,
-        mode: input.mode.unwrap_or_else(|| "ap".to_string()),
-        uplink_iface: input.uplink_iface.unwrap_or_default(),
-        uplink_ssid: input.uplink_ssid.unwrap_or_default(),
-        uplink_password: input.uplink_password.unwrap_or_default(),
+        mode,
+        vpn_enabled,
+        uplink_iface,
+        uplink_ssid,
+        uplink_password,
+        adguard_dns,
+        adguard_dns_port,
     };
 
     // Check collisions
@@ -421,8 +514,8 @@ async fn get_stack(Path(id): Path<String>, State(state): State<AppState>) -> imp
         None => return (StatusCode::NOT_FOUND, Json(json!({ "error": "Stack not found" }))).into_response(),
     };
 
-    let (containers, status) = aggregate_status(&state, &id);
-    let vpn_ip = if status == "running" {
+    let (containers, status) = aggregate_status(&state, &stack);
+    let vpn_ip = if status == "running" && stack.vpn_enabled {
         state.docker_manager.get_vpn_ip(&id)
     } else {
         None
@@ -468,11 +561,39 @@ async fn update_stack(
     if let Some(hw) = input.ap_hw_mode { updated.ap_hw_mode = hw; }
     if let Some(width) = input.ap_channel_width { updated.ap_channel_width = width; }
     if let Some(sec) = input.ap_security { updated.ap_security = sec; }
-    if let Some(auto_rec) = input.auto_reconnect_12h { updated.auto_reconnect_12h = auto_rec; }
+    if let Some(auto_rec) = input.auto_reconnect_8h.or(input.auto_reconnect_12h) { updated.auto_reconnect_8h = auto_rec; }
     if let Some(m) = input.mode { updated.mode = m; }
+    if let Some(v) = input.vpn_enabled { updated.vpn_enabled = v; }
     if let Some(u) = input.uplink_iface { updated.uplink_iface = u; }
     if let Some(u) = input.uplink_ssid { updated.uplink_ssid = u; }
     if let Some(u) = input.uplink_password { updated.uplink_password = u; }
+    if let Some(a) = input.adguard_dns { updated.adguard_dns = a; }
+    if let Some(p) = input.adguard_dns_port { updated.adguard_dns_port = p; }
+
+    // Auto-normalize hw_mode based on channel band
+    if updated.ap_channel > 14 {
+        if updated.ap_hw_mode == "g" || updated.ap_hw_mode == "b" || updated.ap_hw_mode.is_empty() {
+            updated.ap_hw_mode = "a".to_string();
+        }
+    } else if updated.ap_channel > 0 {
+        if updated.ap_hw_mode == "a" || updated.ap_hw_mode == "ac" {
+            updated.ap_hw_mode = "g".to_string();
+        }
+    }
+
+    if updated.mode == "repeater" {
+        updated.vpn_enabled = false;
+        updated.auto_reconnect_8h = false;
+    }
+
+    if updated.mode == "repeater" {
+        if updated.uplink_iface.trim().is_empty() {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Uplink interface is required for repeater mode" }))).into_response();
+        }
+        if updated.uplink_ssid.trim().is_empty() {
+            return (StatusCode::BAD_REQUEST, Json(json!({ "error": "Uplink SSID is required for repeater mode" }))).into_response();
+        }
+    }
 
     // Re-verify collisions (excluding itself)
     for (i, s) in stacks.iter().enumerate() {
@@ -494,7 +615,7 @@ async fn update_stack(
     }
 
     // If stack was running, restart containers to apply new config
-    let (_, status) = aggregate_status(&state, &id);
+    let (_, status) = aggregate_status(&state, &updated);
     if status == "running" {
         let _ = state.docker_manager.restart_stack(&id);
     }
@@ -692,8 +813,36 @@ async fn update_credentials(
 
 // ─── Utils Handlers ──────────────────────────────────────────────────────────
 
+#[derive(Debug, Deserialize)]
+pub struct ScanWifiQuery {
+    pub iface: Option<String>,
+}
+
+async fn scan_wifi_networks(
+    Query(query): Query<ScanWifiQuery>,
+) -> impl IntoResponse {
+    let iface = query.iface.as_deref();
+    let aps = wifi::scan_access_points(iface);
+    Json(aps)
+}
+
 async fn list_wifi_interfaces() -> impl IntoResponse {
     Json(wifi::list_wifi_interfaces())
+}
+
+async fn detect_adguard_dns(State(state): State<AppState>) -> impl IntoResponse {
+    match state.docker_manager.detect_adguard_dns() {
+        Some((ip, port)) => Json(json!({
+            "detected": true,
+            "ip": ip,
+            "port": port
+        })),
+        None => Json(json!({
+            "detected": false,
+            "ip": serde_json::Value::Null,
+            "port": 53
+        })),
+    }
 }
 
 async fn list_vpn_locations() -> impl IntoResponse {
@@ -748,7 +897,7 @@ async fn get_health(State(state): State<AppState>) -> impl IntoResponse {
         Ok(stacks) => {
             let total = stacks.len();
             let active = stacks.iter().filter(|s| {
-                let (_, status) = aggregate_status(&state, &s.id);
+                let (_, status) = aggregate_status(&state, s);
                 status == "running"
             }).count();
             (total, active)

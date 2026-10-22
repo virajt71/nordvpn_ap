@@ -21,21 +21,29 @@ pub struct Stack {
     pub ap_hw_mode: String,
     pub ap_channel_width: u8,
     pub ap_security: String,
-    #[serde(default)]
-    pub auto_reconnect_12h: bool,
+    #[serde(default, alias = "auto_reconnect_12h")]
+    pub auto_reconnect_8h: bool,
     #[serde(default)]
     pub last_reconnect_at: u64,
     #[serde(default = "default_ap_mode")]
-    pub mode: String, // "ap" = single-radio AP; "repeater" = WiFi uplink (STA) + WiFi AP
+    pub mode: String, // "ap" = Access Point (VPN or direct); "repeater" = Wi-Fi Extender (STA + AP)
+    #[serde(default = "default_vpn_enabled")]
+    pub vpn_enabled: bool,
     #[serde(default)]
-    pub uplink_iface: String, // repeater: radio that connects to the parent/upstream AP
+    pub uplink_iface: String, // repeater: interface connecting to parent AP
     #[serde(default)]
     pub uplink_ssid: String,
     #[serde(default)]
     pub uplink_password: String,
+    #[serde(default)]
+    pub adguard_dns: String, // external AdGuard Home instance IP (or empty for built-in container / direct DNS)
+    #[serde(default = "default_adguard_dns_port")]
+    pub adguard_dns_port: u16,
 }
 
 fn default_ap_mode() -> String { "ap".to_string() }
+fn default_vpn_enabled() -> bool { true }
+fn default_adguard_dns_port() -> u16 { 53 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Credentials {
@@ -239,7 +247,7 @@ mod tests {
                 ap_hw_mode: "g".to_string(),
                 ap_channel_width: 20,
                 ap_security: "wpa2".to_string(),
-                auto_reconnect_12h: false,
+                auto_reconnect_8h: false,
                 last_reconnect_at: 0,
                 ..Default::default()
                 },
@@ -257,7 +265,7 @@ mod tests {
                 ap_hw_mode: "g".to_string(),
                 ap_channel_width: 20,
                 ap_security: "wpa2".to_string(),
-                auto_reconnect_12h: false,
+                auto_reconnect_8h: false,
                 last_reconnect_at: 0,
                 ..Default::default()
                 },

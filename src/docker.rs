@@ -55,26 +55,11 @@ impl DockerManager {
 
         let location_env = resolve_location_env(stack);
 
-        // Repeater mode: hand the WiFi uplink (STA) params to the AP container, and
-        // relax its depends_on to service_started. gluetun needs the uplink's internet
-        // to bootstrap the VPN tunnel, and the AP container is what brings the uplink
-        // up -> waiting for gluetun `healthy` would deadlock.
-        let uplink_env = if stack.mode == "repeater" {
-            format!(
-                "      - MODE=repeater\n      - UPLINK_IFACE={ul_iface}\n      - UPLINK_SSID={ul_ssid}\n      - UPLINK_PASSWORD={ul_pass}\n",
-                ul_iface = stack.uplink_iface,
-                ul_ssid = stack.uplink_ssid,
-                ul_pass = stack.uplink_password,
-            )
-        } else {
-            String::new()
-        };
-        let wifi_ap_dep = if stack.mode == "repeater" { "service_started" } else { "service_healthy" };
+        let mut services = String::new();
 
-        // Template string
-        let compose_content = format!(
-            r#"services:
-  gluetun:
+        if stack.vpn_enabled {
+            services.push_str(&format!(
+                r#"  gluetun:
     image: qmcgaw/gluetun
     container_name: gluetun-{id}
     cap_add:
@@ -104,24 +89,75 @@ impl DockerManager {
       start_period: 30s
     restart: unless-stopped
 
-  adguard:
+"#,
+                id = stack.id,
+                host_stack_dir = host_stack_dir,
+                vpn_type = stack.vpn_type,
+                vpn_user = vpn_user,
+                vpn_pass = vpn_pass,
+                wg_key = wg_key,
+                location_env = location_env,
+                firewall_outbound_subnets = firewall_outbound_subnets,
+            ));
+
+            if stack.adguard_dns.trim().is_empty() {
+                services.push_str(&format!(
+                    r#"  adguard:
     image: adguard/adguardhome
     container_name: adguard-{id}
     network_mode: service:gluetun
     volumes:
       - {host_stack_dir}/adguard-work:/opt/adguardhome/work
       - {host_stack_dir}/adguard-conf:/opt/adguardhome/conf
-    # Must join gluetun's netns as soon as it *starts* (netns exists then),
-    # NOT when it is healthy: gluetun's own healthcheck resolves DNS via
-    # 127.0.0.1:53, which is this AdGuard instance. Waiting for healthy
-    # creates a deadlock: gluetun can't be healthy without AdGuard, AdGuard
-    # won't start until gluetun is healthy -> VPN restart loop (DNS refused).
     depends_on:
       gluetun:
         condition: service_started
     restart: unless-stopped
 
-  wifi-ap:
+"#,
+                    id = stack.id,
+                    host_stack_dir = host_stack_dir,
+                ));
+            }
+        }
+
+        let wifi_ap_dep = if stack.vpn_enabled {
+            let dep_cond = if stack.mode == "repeater" { "service_started" } else { "service_healthy" };
+            format!("    depends_on:\n      gluetun:\n        condition: {}\n", dep_cond)
+        } else {
+            String::new()
+        };
+
+        let uplink_env = format!(
+            "      - MODE={mode}\n      - VPN_ENABLED={vpn_enabled}\n      - NORDVPN_ENABLED={vpn_enabled}\n      - UPLINK_IFACE={ul_iface}\n      - UPLINK_SSID={ul_ssid}\n      - UPLINK_PASSWORD={ul_pass}\n      - ADGUARD_DNS={adguard_dns}\n      - ADGUARD_DNS_PORT={adguard_dns_port}\n",
+            mode = stack.mode,
+            vpn_enabled = stack.vpn_enabled,
+            ul_iface = stack.uplink_iface,
+            ul_ssid = stack.uplink_ssid,
+            ul_pass = stack.uplink_password,
+            adguard_dns = stack.adguard_dns,
+            adguard_dns_port = stack.adguard_dns_port,
+        );
+
+        // Normalize ap_hw_mode to ensure frequency consistency
+        let normalized_hw_mode = if stack.ap_channel > 14 {
+            if stack.ap_hw_mode == "g" || stack.ap_hw_mode == "b" || stack.ap_hw_mode.is_empty() {
+                "a".to_string()
+            } else {
+                stack.ap_hw_mode.clone()
+            }
+        } else if stack.ap_channel > 0 {
+            if stack.ap_hw_mode == "a" || stack.ap_hw_mode == "ac" {
+                "g".to_string()
+            } else {
+                stack.ap_hw_mode.clone()
+            }
+        } else {
+            stack.ap_hw_mode.clone()
+        };
+
+        services.push_str(&format!(
+            r#"  wifi-ap:
     build:
       context: ../..
       dockerfile: access_point/Dockerfile.wifi-ap
@@ -142,33 +178,24 @@ impl DockerManager {
       - AP_SECURITY={ap_security}
       - ROUTING_TABLE={routing_table}
       - COUNTRY={id}
-{uplink_env}    depends_on:
-      gluetun:
-        condition: {wifi_ap_dep}
-    restart: unless-stopped
+{uplink_env}{wifi_ap_dep}    restart: unless-stopped
 "#,
             id = stack.id,
-            host_stack_dir = host_stack_dir,
-            vpn_type = stack.vpn_type,
-            vpn_user = vpn_user,
-            vpn_pass = vpn_pass,
-            wg_key = wg_key,
-            location_env = location_env,
-            firewall_outbound_subnets = firewall_outbound_subnets,
             ap_iface = stack.ap_iface,
             ssid = stack.ssid,
             password = stack.password,
             ap_channel = stack.ap_channel,
-            ap_hw_mode = stack.ap_hw_mode,
+            ap_hw_mode = normalized_hw_mode,
             ap_channel_width = stack.ap_channel_width,
-            // Gateway IP is typically the first IP in the subnet
             ap_ip = get_gateway_ip(&stack.subnet),
             ap_subnet = stack.subnet,
             ap_security = stack.ap_security,
             routing_table = stack.routing_table,
             uplink_env = uplink_env,
             wifi_ap_dep = wifi_ap_dep,
-        );
+        ));
+
+        let compose_content = format!("services:\n{}", services);
 
         let compose_path = stack_dir.join("docker-compose.yaml");
         fs::write(compose_path, compose_content)
@@ -318,6 +345,78 @@ impl DockerManager {
         }
         None
     }
+
+    /// Auto-detect AdGuard Home DNS IP:
+    /// 1. Inspect running Docker container whose name or image contains "adguard"
+    /// 2. Or inspect host `adguard-shim` route
+    pub fn detect_adguard_dns(&self) -> Option<(String, u16)> {
+        // Strategy 1: Check running Docker containers
+        if let Ok(output) = Command::new("docker")
+            .args(["ps", "--filter", "status=running", "--format", "{{.ID}}\t{{.Names}}\t{{.Image}}"])
+            .output()
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    let parts: Vec<&str> = line.split('\t').collect();
+                    if parts.is_empty() {
+                        continue;
+                    }
+                    let id = parts[0].trim();
+                    let name = parts.get(1).unwrap_or(&"").to_lowercase();
+                    let image = parts.get(2).unwrap_or(&"").to_lowercase();
+
+                    if name.contains("adguard") || image.contains("adguard") {
+                        if let Ok(insp) = Command::new("docker")
+                            .args([
+                                "inspect",
+                                id,
+                                "--format",
+                                "{{range .NetworkSettings.Networks}}{{if .IPAddress}}{{.IPAddress}} {{end}}{{end}} {{.NetworkSettings.IPAddress}}",
+                            ])
+                            .output()
+                        {
+                            if insp.status.success() {
+                                let insp_out = String::from_utf8_lossy(&insp.stdout);
+                                for token in insp_out.split_whitespace() {
+                                    let clean_ip = token.trim();
+                                    if let Ok(parsed) = clean_ip.parse::<std::net::Ipv4Addr>() {
+                                        if !parsed.is_loopback() && !parsed.is_unspecified() {
+                                            info!("Auto-detected AdGuard Home container '{}' at IP {}", name, clean_ip);
+                                            return Some((clean_ip.to_string(), 53));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Strategy 2: Check adguard-shim route on host
+        if let Ok(output) = Command::new("ip")
+            .args(["-o", "-4", "route", "show", "dev", "adguard-shim"])
+            .output()
+        {
+            if output.status.success() {
+                let stdout = String::from_utf8_lossy(&output.stdout);
+                for line in stdout.lines() {
+                    if let Some(first) = line.split_whitespace().next() {
+                        let clean_ip = first.split('/').next().unwrap_or(first).trim();
+                        if let Ok(parsed) = clean_ip.parse::<std::net::Ipv4Addr>() {
+                            if !parsed.is_loopback() && !parsed.is_unspecified() {
+                                info!("Auto-detected AdGuard Home via adguard-shim route: {}", clean_ip);
+                                return Some((clean_ip.to_string(), 53));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        None
+    }
 }
 // Utility to parse subnet and get first host IP. E.g. "192.168.60.0/24" -> "192.168.60.1"
 fn get_gateway_ip(subnet: &str) -> String {
@@ -365,7 +464,7 @@ mod tests {
             ap_hw_mode: "g".to_string(),
             ap_channel_width: 20,
             ap_security: "wpa2".to_string(),
-            auto_reconnect_12h: false,
+            auto_reconnect_8h: false,
             last_reconnect_at: 0,
         ..Default::default()
         };
@@ -388,7 +487,7 @@ mod tests {
             ap_hw_mode: "g".to_string(),
             ap_channel_width: 20,
             ap_security: "wpa2".to_string(),
-            auto_reconnect_12h: false,
+            auto_reconnect_8h: false,
             last_reconnect_at: 0,
         ..Default::default()
         };
@@ -411,10 +510,71 @@ mod tests {
             ap_hw_mode: "g".to_string(),
             ap_channel_width: 20,
             ap_security: "wpa2".to_string(),
-            auto_reconnect_12h: false,
+            auto_reconnect_8h: false,
             last_reconnect_at: 0,
         ..Default::default()
         };
         assert_eq!(resolve_location_env(&stack), "SERVER_CITIES=Seattle");
+    }
+
+    #[test]
+    fn test_generate_compose_plain_repeater() {
+        let temp_dir = std::env::temp_dir().join("nordvpn_test_repeater");
+        let dm = DockerManager::new(&temp_dir, "/opt/nordvpn_ap");
+        let stack = Stack {
+            id: "repeater0".to_string(),
+            ssid: "HomeNet-Repeater".to_string(),
+            password: "password123".to_string(),
+            ap_iface: "wlp0s20u2".to_string(),
+            vpn_type: "wireguard".to_string(),
+            vpn_country: "Direct".to_string(),
+            vpn_city: None,
+            subnet: "192.168.90.0/24".to_string(),
+            routing_table: 110,
+            ap_channel: 6,
+            ap_hw_mode: "g".to_string(),
+            ap_channel_width: 20,
+            ap_security: "wpa2".to_string(),
+            auto_reconnect_8h: false,
+            last_reconnect_at: 0,
+            mode: "repeater".to_string(),
+            vpn_enabled: false,
+            uplink_iface: "wlo1".to_string(),
+            uplink_ssid: "Parent-WiFi".to_string(),
+            uplink_password: "parent-secret".to_string(),
+            adguard_dns: "192.168.50.145".to_string(),
+            adguard_dns_port: 53,
+        };
+        let creds = Credentials {
+            openvpn_user: None,
+            openvpn_password: None,
+            wireguard_private_key: None,
+        };
+        let res = dm.generate_compose_file(&stack, &creds);
+        assert!(res.is_ok());
+
+        let compose_content = std::fs::read_to_string(dm.get_stack_dir("repeater0").join("docker-compose.yaml")).unwrap();
+        assert!(!compose_content.contains("gluetun:"));
+        assert!(!compose_content.contains("adguard:"));
+        assert!(compose_content.contains("wifi-ap:"));
+        assert!(compose_content.contains("MODE=repeater"));
+        assert!(compose_content.contains("VPN_ENABLED=false"));
+        assert!(compose_content.contains("UPLINK_IFACE=wlo1"));
+        assert!(compose_content.contains("UPLINK_SSID=Parent-WiFi"));
+        assert!(compose_content.contains("ADGUARD_DNS=192.168.50.145"));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn test_detect_adguard_dns_does_not_panic() {
+        let temp_dir = std::env::temp_dir().join(format!("dm_test_detect_{}", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()));
+        let dm = DockerManager::new(&temp_dir, "/tmp/host");
+        let result = dm.detect_adguard_dns();
+        // If running in an environment with AdGuard, result is Some; otherwise None. Must not panic.
+        if let Some((ip, port)) = result {
+            assert!(ip.parse::<std::net::Ipv4Addr>().is_ok());
+            assert_eq!(port, 53);
+        }
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

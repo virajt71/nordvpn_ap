@@ -87,22 +87,6 @@ function ShellContent() {
             {!collapsed && live && health.host_project_dir_defaulted && (
               <div className="rounded-md border border-warning/25 bg-warning/10 p-3 text-xs text-warning">HOST_PROJECT_DIR is not set on the host.</div>
             )}
-            {!collapsed && (
-              <div className="rounded-md border border-border bg-card/60 p-3">
-                <div className="flex items-center gap-2 text-xs">
-                  <span className={`size-2 rounded-full ${live ? 'bg-success' : 'bg-warning'}`} />
-                  <span>{loading ? 'Connecting…' : live ? 'Live stack telemetry' : 'Rust service offline'}</span>
-                </div>
-                <div className="mt-3 grid grid-cols-3 gap-2">
-                  {[[stacks.length, 'STACKS'], [running.length, 'TUNNELS'], [interfaces.length, 'APs']].map(([value, label]) => (
-                    <div className="min-w-0 rounded-md border border-border bg-background/50 p-2" key={label}>
-                      <div className="font-mono text-lg font-bold leading-none">{live ? value : '—'}</div>
-                      <div className="mt-1 text-[9px] text-muted-foreground">{label}</div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
             <div className="flex items-center justify-between gap-1 border-t border-border pt-3">
               <span className="flex items-center gap-2 text-xs text-muted-foreground">
                 <span className={`size-2 rounded-full ${live ? 'bg-success' : 'bg-warning'}`} />
@@ -125,22 +109,6 @@ function ShellContent() {
               </div>
               <main className="px-5 py-7 md:px-8 lg:px-10 lg:py-9"><Outlet /></main>
             </div>
-
-            {health && interfaces.length > 0 && (
-              <footer className="mt-auto border-t border-border px-5 py-4 md:px-8 lg:px-10">
-                <div className="flex flex-wrap items-center justify-between gap-4 font-mono text-xs text-muted-foreground">
-                  <span className="flex items-center gap-2">
-                    <Wifi className="size-4 text-primary" />
-                    <span>
-                      <strong className="font-bold text-foreground">{interfaces.length}</strong> wireless interface{interfaces.length === 1 ? '' : 's'} detected
-                    </span>
-                  </span>
-                  <Link to="/interfaces" onClick={() => setMobileOpen(false)} className="text-primary hover:underline flex items-center gap-1">
-                    Inspect hardware →
-                  </Link>
-                </div>
-              </footer>
-            )}
           </div>
         </div>
       </div>

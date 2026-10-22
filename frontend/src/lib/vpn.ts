@@ -2,7 +2,10 @@ export type Stack = {
   id: string; ssid: string; password: string; ap_iface: string; vpn_type: string;
   vpn_country: string; vpn_city?: string | null; subnet: string; routing_table: number;
   ap_channel: number; ap_hw_mode: string; ap_channel_width: number;
-  ap_security: string; auto_reconnect_12h: boolean; last_reconnect_at?: number;
+  ap_security: string; auto_reconnect_8h?: boolean; auto_reconnect_12h?: boolean; last_reconnect_at?: number;
+  mode: 'ap' | 'repeater'; vpn_enabled: boolean;
+  uplink_iface?: string; uplink_ssid?: string; uplink_password?: string;
+  adguard_dns?: string; adguard_dns_port?: number;
   status: 'running' | 'stopped' | 'starting' | 'error'; vpn_ip: string | null;
   containers: { name: string; status: string }[];
 };
@@ -16,6 +19,20 @@ export type Health = { status: string; docker_socket_reachable: boolean; host_pr
 export type Credentials = { has_openvpn_user: boolean; has_openvpn_password: boolean; has_wireguard_private_key: boolean };
 export type Logs = { gluetun: string; adguard: string; wifi_ap: string };
 export type Location = { name: string; code: string; cities?: { name: string }[] };
+export type AdGuardDetectResult = {
+  detected: boolean;
+  ip: string | null;
+  port: number;
+};
+export type ScannedAccessPoint = {
+  ssid: string;
+  bssid: string;
+  signal_dbm: number;
+  signal_percent: number;
+  frequency: number;
+  channel: number;
+  security: string;
+};
 
 export async function vpnRequest<T>(path: string, token: string, options: RequestInit = {}): Promise<T> {
   let response: Response;

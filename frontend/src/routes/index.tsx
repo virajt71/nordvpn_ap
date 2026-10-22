@@ -1,6 +1,28 @@
 import { Link, createFileRoute } from '@tanstack/react-router';
 import { useEffect, useState } from 'react';
-import { Activity, AlertTriangle, ArrowUpRight, FileText, Play, Plus, RadioTower, RotateCcw, Square, Trash2, Wifi } from 'lucide-react';
+import {
+  Activity,
+  AlertTriangle,
+  ArrowUpRight,
+  Check,
+  Copy,
+  Cpu,
+  Eye,
+  EyeOff,
+  FileText,
+  KeyRound,
+  Network,
+  Play,
+  Plus,
+  RadioTower,
+  RotateCcw,
+  Shield,
+  ShieldCheck,
+  Square,
+  Terminal,
+  Trash2,
+  Wifi,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import {
   AlertDialog,
@@ -17,6 +39,7 @@ import { useVpn } from '@/components/vpn-provider';
 import { StackForm } from '@/components/stack-form';
 import { StackLogs } from '@/components/stack-logs';
 import type { Location, Stack } from '@/lib/vpn';
+import { copyToClipboard } from '@/lib/clipboard';
 
 export const Route = createFileRoute('/')({
   head: () => ({
@@ -40,10 +63,23 @@ function Dashboard() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [busy, setBusy] = useState<string | null>(null);
   const [actionError, setActionError] = useState('');
+  const [showPassword, setShowPassword] = useState<Record<string, boolean>>({});
+  const [copiedId, setCopiedId] = useState<string | null>(null);
 
   useEffect(() => {
     if (health) void request<Location[]>('/vpn/locations').then(setLocations).catch(() => setLocations([]));
   }, [health?.status, request]);
+
+  const copyPassword = async (id: string, pwd: string) => {
+    const ok = await copyToClipboard(pwd);
+    if (ok) {
+      setCopiedId(id);
+      notify('Wi-Fi password copied to clipboard.');
+      window.setTimeout(() => setCopiedId(null), 2000);
+    } else {
+      notify('Failed to copy to clipboard.');
+    }
+  };
 
   const run = async (id: string, action: 'start' | 'stop' | 'restart' | 'delete') => {
     setBusy(id);
@@ -63,6 +99,8 @@ function Dashboard() {
 
   const active = stacks.filter(s => s.status === 'running');
   const partial = stacks.filter(s => s.status === 'starting' || s.status === 'error');
+  const repeaters = stacks.filter(s => s.mode === 'repeater');
+  const activeRepeaters = repeaters.filter(s => s.status === 'running');
 
   return (
     <div className="space-y-6">
@@ -72,9 +110,6 @@ function Dashboard() {
         description="Monitor and control your VPN network gateways."
         action={
           <div className="flex flex-wrap gap-2">
-            <Button variant="outline" onClick={() => { if (stacks[0]) setLogsId(stacks[0].id); }} disabled={!stacks.length}>
-              <FileText className="size-4" /> View logs
-            </Button>
             <Button onClick={() => setFormStack('new')} disabled={!health}>
               <Plus className="size-4" /> New access point
             </Button>
@@ -102,13 +137,19 @@ function Dashboard() {
           </div>
           <div className="metric">
             <span className="eyebrow">VPN TUNNELS</span>
-            <div className="mt-3 font-mono text-3xl font-semibold">{health ? active.filter(s => s.vpn_ip).length : '—'}</div>
+            <div className="mt-3 font-mono text-3xl font-semibold">{health ? active.filter(s => s.vpn_enabled && s.vpn_ip).length : '—'}</div>
             <p className="mt-2 text-xs text-muted-foreground">Running stacks with a VPN IP</p>
           </div>
           <div className="metric">
-            <span className="eyebrow">WI-FI HARDWARE</span>
-            <div className="mt-3 font-mono text-3xl font-semibold">{health ? interfaces.filter(i => i.supports_ap).length : '—'}</div>
-            <p className="mt-2 text-xs text-muted-foreground">AP-capable interfaces · {health ? interfaces.length : '—'} detected</p>
+            <span className="eyebrow">REPEATER MODE</span>
+            <div className="mt-3 font-mono text-3xl font-semibold">{health ? `${activeRepeaters.length} / ${repeaters.length}` : '—'}</div>
+            <p className="mt-2 text-xs text-muted-foreground truncate" title={activeRepeaters[0]?.uplink_ssid ? `Extending "${activeRepeaters[0].uplink_ssid}" (${activeRepeaters[0].uplink_iface})` : undefined}>
+              {activeRepeaters[0]?.uplink_ssid
+                ? `Extending "${activeRepeaters[0].uplink_ssid}" (${activeRepeaters[0].uplink_iface})`
+                : repeaters.length > 0
+                ? `${repeaters.length} repeater stack configured`
+                : 'Wi-Fi range extender mode'}
+            </p>
           </div>
         </div>
         {!!partial.length && <p className="mt-4 text-xs text-warning">{partial.length} stack{partial.length === 1 ? '' : 's'} not fully running.</p>}
@@ -131,127 +172,262 @@ function Dashboard() {
           </div>
         ) : (
           <div className="grid gap-3 xl:grid-cols-2">
-            {stacks.map(stack => (
-              <article key={stack.id} className="surface p-5">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <StatusDot active={stack.status === 'running'} />
-                      <h3 className="truncate font-mono text-sm font-semibold">{stack.ssid}</h3>
+            {stacks.map(stack => {
+              const isRunning = stack.status === 'running';
+              const isBusy = busy === stack.id;
+
+              return (
+                <article key={stack.id} className="surface p-4 md:p-5 flex flex-col justify-between gap-3">
+                  <div>
+                    {/* ─── Header: SSID, Mode, Status ──────────────────────── */}
+                    <div className="flex flex-wrap items-start justify-between gap-2.5">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <StatusDot active={isRunning} />
+                          <h3 className="truncate font-mono text-sm font-bold text-foreground">{stack.ssid}</h3>
+                        </div>
+                        <div className="mt-0.5 pl-4 flex flex-wrap items-center gap-1.5 font-mono text-[11px] text-muted-foreground">
+                          <span>{stack.id}</span>
+                          <span>·</span>
+                          <span className="text-foreground">AP: {stack.ap_iface}</span>
+                          {stack.mode !== 'ap' && stack.uplink_iface && (
+                            <>
+                              <span>·</span>
+                              <span className="text-primary">Uplink: {stack.uplink_iface}</span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="rounded border border-primary/30 bg-primary/10 px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-primary">
+                          {stack.mode === 'repeater' ? 'Repeater' : 'AP'}
+                        </span>
+                        {stack.vpn_enabled && (stack.auto_reconnect_8h || stack.auto_reconnect_12h) && (
+                          <span
+                            className="rounded border border-primary/40 bg-primary/10 px-1.5 py-0.5 font-mono text-[9px] text-primary flex items-center gap-1"
+                            title="Auto-reconnects Gluetun tunnel every 8 hours"
+                          >
+                            <RotateCcw className="size-2.5" />
+                            <span>8h Reconnect</span>
+                          </span>
+                        )}
+                        {!stack.vpn_enabled && (
+                          <span className="rounded border border-border bg-secondary px-1.5 py-0.5 font-mono text-[9px] uppercase tracking-wide text-muted-foreground">
+                            Direct NAT
+                          </span>
+                        )}
+                        <span className={`rounded border px-2 py-0.5 font-mono text-[10px] uppercase font-semibold ${
+                          isRunning
+                            ? 'border-success/30 bg-success/10 text-success'
+                            : stack.status === 'stopped'
+                            ? 'border-border text-muted-foreground'
+                            : 'border-warning/30 bg-warning/10 text-warning'
+                        }`}>
+                          {stack.status}
+                        </span>
+                      </div>
                     </div>
-                    <p className="mt-1 pl-4 font-mono text-[11px] text-muted-foreground">{stack.id} · {stack.ap_iface}</p>
+
+                    {/* ─── Wi-Fi Key & Telemetry ───────────────────────────── */}
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-2 border-t border-border/50 pt-2.5 text-xs font-mono">
+                      <div className="flex items-center gap-1.5 text-muted-foreground">
+                        <span>Password:</span>
+                        <span className="font-semibold text-foreground tracking-wider">
+                          {showPassword[stack.id] ? stack.password : '••••••••'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setShowPassword(p => ({ ...p, [stack.id]: !p[stack.id] }))}
+                          className="text-muted-foreground hover:text-foreground p-0.5"
+                          title={showPassword[stack.id] ? 'Hide password' : 'Show password'}
+                          aria-label={showPassword[stack.id] ? 'Hide password' : 'Show password'}
+                        >
+                          {showPassword[stack.id] ? <EyeOff className="size-3" /> : <Eye className="size-3" />}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => copyPassword(stack.id, stack.password)}
+                          className="text-muted-foreground hover:text-foreground p-0.5"
+                          title="Copy password"
+                          aria-label="Copy password"
+                        >
+                          {copiedId === stack.id ? <Check className="size-3 text-success" /> : <Copy className="size-3" />}
+                        </button>
+                      </div>
+
+                      <div className="flex items-center gap-2 text-muted-foreground text-[11px]">
+                        <span>IP: <strong className="text-foreground">{stack.vpn_ip || stack.subnet}</strong></span>
+                      </div>
+                    </div>
+
+                    {/* ─── Gateway / Route / Container Status ──────────────── */}
+                    <div className="mt-2 flex flex-wrap items-center justify-between gap-2 text-[11px] font-mono text-muted-foreground">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-foreground">
+                          {stack.vpn_enabled
+                            ? `${stack.vpn_type === 'wireguard' ? 'WireGuard' : 'OpenVPN'} · ${stack.vpn_city || stack.vpn_country || 'NordVPN'}`
+                            : 'Local Routing'}
+                        </span>
+                        {stack.adguard_dns && (
+                          <>
+                            <span>•</span>
+                            <span className="text-primary">AdGuard: {stack.adguard_dns}</span>
+                          </>
+                        )}
+                      </div>
+
+                      {stack.containers && stack.containers.length > 0 && (
+                        <div className="flex items-center gap-2 text-[10px]">
+                          {stack.containers.map(c => (
+                            <span key={c.name} className="flex items-center gap-1" title={`${c.name}: ${c.status}`}>
+                              <span className={`size-1.5 rounded-full ${c.status === 'running' ? 'bg-success' : 'bg-muted-foreground/60'}`} />
+                              <span>{c.name}</span>
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                  <span className={`rounded border px-2 py-1 font-mono text-[10px] uppercase ${
-                    stack.status === 'running'
-                      ? 'border-success/30 bg-success/10 text-success'
-                      : stack.status === 'stopped'
-                      ? 'border-border text-muted-foreground'
-                      : 'border-warning/30 bg-warning/10 text-warning'
-                  }`}>
-                    {stack.status}
-                  </span>
-                </div>
 
-                <div className="mt-5 grid grid-cols-2 gap-x-3 gap-y-4 border-y border-border py-4 text-xs sm:grid-cols-4">
-                  <div><span className="eyebrow">VPN</span><p className="mt-1 truncate font-mono">{stack.vpn_type}</p></div>
-                  <div><span className="eyebrow">LOCATION</span><p className="mt-1 truncate font-mono">{stack.vpn_city || stack.vpn_country || '—'}</p></div>
-                  <div><span className="eyebrow">VPN IP</span><p className="mt-1 truncate font-mono">{stack.vpn_ip || '—'}</p></div>
-                  <div><span className="eyebrow">SUBNET</span><p className="mt-1 truncate font-mono">{stack.subnet}</p></div>
-                </div>
+                  {/* ─── Actions Toolbar ─────────────────────────────────── */}
+                  <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-border/50 pt-3">
+                    {isRunning ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-destructive/40 text-destructive hover:bg-destructive/10"
+                        disabled={isBusy}
+                        onClick={() => void run(stack.id, 'stop')}
+                      >
+                        <Square className="size-3.5 fill-current" /> Stop
+                      </Button>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="default"
+                        disabled={isBusy}
+                        onClick={() => void run(stack.id, 'start')}
+                      >
+                        <Play className="size-3.5 fill-current" /> Start
+                      </Button>
+                    )}
 
-                <div className="mt-4 flex flex-wrap items-center gap-2">
-                  <Button
-                    size="sm"
-                    variant={stack.status === 'running' ? 'outline' : 'default'}
-                    disabled={busy === stack.id}
-                    onClick={() => void run(stack.id, 'start')}
-                  >
-                    <Play className="size-3.5" /> Start
-                  </Button>
+                    {isRunning && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={isBusy}
+                        onClick={() => void run(stack.id, 'restart')}
+                      >
+                        <RotateCcw className="size-3.5" /> Restart
+                      </Button>
+                    )}
 
-                  <Button
-                    size="sm"
-                    variant={stack.status === 'running' ? 'default' : 'outline'}
-                    disabled={busy === stack.id}
-                    onClick={() => void run(stack.id, 'stop')}
-                  >
-                    <Square className="size-3.5" /> Stop
-                  </Button>
+                    <Button size="sm" variant="outline" onClick={() => setFormStack(stack)}>Edit</Button>
+                    <Button size="sm" variant="outline" onClick={() => setLogsId(stack.id)}>
+                      <FileText className="size-3.5" /> Logs
+                    </Button>
 
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={busy === stack.id}
-                    onClick={() => void run(stack.id, 'restart')}
-                  >
-                    <RotateCcw className="size-3.5" /> Restart
-                  </Button>
-
-                  <Button size="sm" variant="outline" onClick={() => setFormStack(stack)}>Edit</Button>
-                  <Button size="sm" variant="outline" onClick={() => setLogsId(stack.id)}><FileText className="size-3.5" /> Logs</Button>
-
-                  <Button
-                    size="icon"
-                    variant="ghost"
-                    title={`Delete ${stack.id}`}
-                    aria-label={`Delete ${stack.id}`}
-                    disabled={busy === stack.id}
-                    onClick={() => setDeleteConfirmStack(stack)}
-                    className="ml-auto text-destructive hover:bg-destructive/10"
-                  >
-                    <Trash2 className="size-4" />
-                  </Button>
-                </div>
-              </article>
-            ))}
+                    <Button
+                      size="icon"
+                      variant="ghost"
+                      title={`Delete ${stack.id}`}
+                      aria-label={`Delete ${stack.id}`}
+                      disabled={isBusy}
+                      onClick={() => setDeleteConfirmStack(stack)}
+                      className="ml-auto text-destructive hover:bg-destructive/10"
+                    >
+                      <Trash2 className="size-4" />
+                    </Button>
+                  </div>
+                </article>
+              );
+            })}
           </div>
         )}
       </section>
 
-      <div className="grid gap-5 lg:grid-cols-2">
-        <section className="surface p-5">
-          <SectionTitle icon={RadioTower} detail={health ? `${active.length} active` : undefined}>
-            VPN Tunnels
-          </SectionTitle>
-          {active.length ? (
-            <div className="space-y-2">
-              {active.map(s => (
-                <div key={s.id} className="flex items-center justify-between gap-3 rounded-md border border-border bg-secondary/40 px-3 py-3">
-                  <div className="min-w-0">
-                    <div className="flex items-center gap-2">
-                      <StatusDot active />
-                      <strong className="truncate font-mono text-xs">{s.id} · {s.vpn_type}</strong>
-                    </div>
-                    <p className="mt-1 truncate pl-4 text-[11px] text-muted-foreground">{s.ap_iface} → {s.vpn_city || s.vpn_country}</p>
-                  </div>
-                  <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{s.vpn_ip || 'IP pending'}</span>
-                </div>
-              ))}
+      {/* ─── System Telemetry & Hardware Overview ─────────────────────────── */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <section className="surface p-4 md:p-5">
+          <div className="flex items-center justify-between pb-3 border-b border-border">
+            <div className="flex items-center gap-2 font-mono text-xs font-semibold">
+              <Wifi className="size-4 text-primary" />
+              <span>Wireless Hardware Radios</span>
             </div>
-          ) : (
-            <p className="py-8 text-center text-sm text-muted-foreground">{health ? 'No running VPN tunnels.' : 'Tunnel status appears when the Rust service is connected.'}</p>
-          )}
+            <Link to="/interfaces" className="text-xs text-primary hover:underline font-mono">
+              Manage Hardware →
+            </Link>
+          </div>
+
+          <div className="mt-3 divide-y divide-border/60">
+            {interfaces.map(iface => {
+              const boundStack = stacks.find(s => s.ap_iface === iface.name);
+              const isUplink = stacks.find(s => s.mode !== 'ap' && s.uplink_iface === iface.name);
+
+              return (
+                <div key={iface.name} className="flex items-center justify-between py-2.5 text-xs font-mono">
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <StatusDot active={iface.supports_ap} />
+                    <span className="font-bold text-foreground">{iface.name}</span>
+                    <span className="text-[11px] text-muted-foreground truncate hidden sm:inline">
+                      {iface.vendor_model}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center gap-2 shrink-0">
+                    {boundStack ? (
+                      <span className="rounded bg-primary/15 px-1.5 py-0.5 text-[10px] text-primary font-semibold">
+                        AP: {boundStack.id}
+                      </span>
+                    ) : isUplink ? (
+                      <span className="rounded bg-secondary px-1.5 py-0.5 text-[10px] text-foreground">
+                        Uplink: {isUplink.id}
+                      </span>
+                    ) : (
+                      <span className="text-[10px] text-muted-foreground">Available</span>
+                    )}
+                    <span className="text-[10px] text-muted-foreground hidden md:inline">
+                      Ch {iface.default_channel} ({iface.default_width}MHz)
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
         </section>
 
-        <section className="surface p-5">
-          <SectionTitle icon={FileText}>Live Logs</SectionTitle>
-          {stacks.length ? (
-            <div className="space-y-2">
-              {stacks.slice(0, 3).map(s => (
-                <div key={s.id} className="flex items-center justify-between gap-3 border-b border-border py-2 last:border-0">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <StatusDot active={s.status === 'running'} />
-                    <span className="truncate font-mono text-xs">{s.id}</span>
-                  </div>
-                  <Button variant="ghost" size="sm" onClick={() => setLogsId(s.id)}>
-                    Inspect <ArrowUpRight className="size-3.5" />
-                  </Button>
-                </div>
-              ))}
+        <section className="surface p-4 md:p-5">
+          <div className="flex items-center justify-between pb-3 border-b border-border">
+            <div className="flex items-center gap-2 font-mono text-xs font-semibold">
+              <ShieldCheck className="size-4 text-success" />
+              <span>Gateway & Security Subsystems</span>
             </div>
-          ) : (
-            <p className="py-8 text-center text-sm text-muted-foreground">{health ? 'No stacks to inspect.' : 'Logs appear when the Rust service is connected.'}</p>
-          )}
+            <Link to="/credentials" className="text-xs text-primary hover:underline font-mono">
+              VPN Settings →
+            </Link>
+          </div>
+
+          <div className="mt-3 space-y-2.5 text-xs font-mono">
+            <div className="flex items-center justify-between rounded-md border border-border/60 bg-secondary/20 p-2.5">
+              <span className="text-muted-foreground">Docker Engine Socket</span>
+              <span className={`flex items-center gap-1.5 font-medium ${health?.docker_socket_reachable ? 'text-success' : 'text-warning'}`}>
+                <span className={`size-1.5 rounded-full ${health?.docker_socket_reachable ? 'bg-success' : 'bg-warning'}`} />
+                {health?.docker_socket_reachable ? 'Connected & Healthy' : 'Unreachable'}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between rounded-md border border-border/60 bg-secondary/20 p-2.5">
+              <span className="text-muted-foreground">VPN Tunnel Subsystem</span>
+              <span className="text-foreground">NordLynx / WireGuard & OpenVPN</span>
+            </div>
+
+            <div className="flex items-center justify-between rounded-md border border-border/60 bg-secondary/20 p-2.5">
+              <span className="text-muted-foreground">DNS Interception & DoT Filter</span>
+              <span className="text-foreground">Port 53 redirect · Port 853 TCP reset</span>
+            </div>
+          </div>
         </section>
       </div>
 
